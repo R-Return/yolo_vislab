@@ -26,6 +26,7 @@ export interface BoxStyle {
 }
 
 export type ViewMode = 'grid' | 'pr-curve';
+export type AspectRatio = '16:9' | '4:3' | '1:1' | 'auto';
 
 export interface VisualizationConfig {
   iopThreshold: number; // Changed from iouThreshold
@@ -37,7 +38,9 @@ export interface VisualizationConfig {
     fn: BoxStyle;
   };
   lineWidth: number;
+  labelFontSize: number;
   gridSize: 9 | 16;
+  aspectRatio: AspectRatio;
   zoomLevel: number;
   viewMode: ViewMode;
 }
@@ -72,10 +75,20 @@ export interface Project {
   predFiles: FileMap;
 }
 
+export interface HitRegion {
+  type: BoxType;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface RenderResult {
   stats: {
     tp: number;
     fp: number;
     fn: number;
   };
+  hitRegions: HitRegion[];
+  boxes?: RenderBox[]; // Return boxes for caching
 }

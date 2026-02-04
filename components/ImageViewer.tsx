@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
-import { ImageItem, VisualizationConfig } from '../types';
+import { ImageItem, VisualizationConfig, BoxType, RenderBox, HitRegion } from '../types';
 import { drawVisualization } from '../utils/render';
 
 interface ImageViewerProps {
@@ -11,13 +11,39 @@ interface ImageViewerProps {
 const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [stats, setStats] = useState({ tp: 0, fp: 0, fn: 0 });
-  const [loading, setLoading] = useState(true);
+  
+  // Cache the processed data to avoid re-parsing on hover
+  const [cachedData, setCachedData] = useState<{
+      img: HTMLImageElement;
+      boxes: RenderBox[];
+      hitRegions: HitRegion[];
+  } | null>(null);
 
+  const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  
+  // Highlight interaction
+  const [hoveredStat, setHoveredStat] = useState<BoxType | null>(null);
+
+  // Close context menu on global click
+  useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    if (contextMenu) {
+        window.addEventListener('click', closeMenu);
+        window.addEventListener('scroll', closeMenu, true); // Close on scroll
+    }
+    return () => {
+        window.removeEventListener('click', closeMenu);
+        window.removeEventListener('scroll', closeMenu, true);
+    }
+  }, [contextMenu]);
+
+  // Initial Load Effect
   useEffect(() => {
     let active = true;
     
-    const process = async () => {
+    const load = async () => {
       setLoading(true);
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -31,15 +57,19 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
             return;
         }
 
-        // Set canvas size to natural image size
         canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
         const ctx = canvas.getContext('2d');
         
         if (ctx) {
+          // Initial render (calculates boxes and regions)
           const result = await drawVisualization(ctx, item, config, img.naturalWidth, img.naturalHeight, img);
           if (active) {
-             setStats(result.stats);
+             setCachedData({
+                 img,
+                 boxes: result.boxes || [],
+                 hitRegions: result.hitRegions
+             });
           }
         }
         
@@ -50,53 +80,149 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
       img.src = url;
     };
 
-    process();
+    load();
 
     return () => { active = false; };
-  }, [item, config]);
+  }, [item, config]); // Re-run if item or config changes
 
-  const handleDownload = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const link = document.createElement('a');
-      link.download = `vis_${item.name}`;
-      link.href = canvas.toDataURL('image/jpeg', 0.9);
-      link.click();
+  // Hover/Highlight Effect (Re-render using cache)
+  useEffect(() => {
+      if (!cachedData || !canvasRef.current) return;
+      
+      const ctx = canvasRef.current.getContext('2d');
+      if (!ctx) return;
+
+      // Fast re-render using cached image and boxes
+      drawVisualization(
+          ctx, 
+          item, 
+          config, 
+          cachedData.img.naturalWidth, 
+          cachedData.img.naturalHeight, 
+          cachedData.img,
+          {
+              preCalculatedBoxes: cachedData.boxes,
+              highlightType: hoveredStat
+          }
+      );
+
+  }, [hoveredStat, cachedData, config, item]);
+
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+        const img = new Image();
+        const url = URL.createObjectURL(item.file);
+        img.src = url;
+        await new Promise((resolve) => img.onload = resolve);
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        
+        const dynamicFontSize = Math.max(12, Math.floor(img.naturalWidth * 0.02));
+        const dynamicLineWidth = Math.max(1, Math.floor(img.naturalWidth * 0.002));
+
+        await drawVisualization(ctx, item, config, img.naturalWidth, img.naturalHeight, img, {
+            fontSize: dynamicFontSize,
+            forceLineWidth: dynamicLineWidth
+        });
+        
+        const link = document.createElement('a');
+        link.download = `vis_${item.name}`;
+        link.href = canvas.toDataURL('image/jpeg', 0.95); 
+        link.click();
+        
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Download failed", e);
+    } finally {
+        setDownloading(false);
+        setContextMenu(null);
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // Prevent menu from going off-screen
+    const x = Math.min(e.clientX, window.innerWidth - 180);
+    const y = Math.min(e.clientY, window.innerHeight - 50);
+    setContextMenu({ x, y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!cachedData || !canvasRef.current) return;
+      
+      const rect = canvasRef.current.getBoundingClientRect();
+      const scaleX = canvasRef.current.width / rect.width;
+      const scaleY = canvasRef.current.height / rect.height;
+      
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+
+      // Check for collision with stats regions
+      const hit = cachedData.hitRegions.find(r => 
+          x >= r.x && x <= r.x + r.w &&
+          y >= r.y && y <= r.y + r.h
+      );
+
+      if (hit) {
+          if (hoveredStat !== hit.type) setHoveredStat(hit.type);
+      } else {
+          if (hoveredStat !== null) setHoveredStat(null);
+      }
+  };
+
+  const handleMouseLeave = () => {
+      setHoveredStat(null);
+  };
+
+  // Determine Aspect Ratio Class
+  let aspectClass = "aspect-square"; 
+  if (config.aspectRatio === '16:9') aspectClass = "aspect-video";
+  else if (config.aspectRatio === '4:3') aspectClass = "aspect-[4/3]";
+  else if (config.aspectRatio === '1:1') aspectClass = "aspect-square";
+  else if (config.aspectRatio === 'auto') aspectClass = "aspect-auto h-64"; 
+
   return (
-    <div ref={containerRef} className="relative group bg-slate-900 rounded-lg overflow-hidden border border-slate-700 aspect-video flex items-center justify-center">
-      {/* Loading State */}
+    <div 
+      ref={containerRef} 
+      className={`relative bg-slate-900 rounded-lg overflow-hidden border border-slate-700 ${aspectClass} flex items-center justify-center w-full`}
+      onContextMenu={handleContextMenu}
+    >
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
         </div>
       )}
 
-      {/* Main Canvas */}
       <canvas 
         ref={canvasRef} 
-        className="max-w-full max-h-full object-contain"
+        className="max-w-full max-h-full object-contain cursor-crosshair"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       />
 
-      {/* Overlays are now drawn onto the canvas by drawVisualization, but we can keep DOM overlays if we want crisp text on zoom, 
-          however, for consistency with the "Download Grid" feature which burns text into pixels, and the user's request for the downloaded image 
-          to have these details, the canvas approach in drawVisualization is better. 
-          We hide the DOM overlays to avoid duplication, or we can keep them for better accessibility/readability on screen.
-          Let's hide DOM overlays since drawVisualization handles them now.
-      */}
-
-      {/* Download Button (Hover) */}
-      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-end justify-end p-2 opacity-0 group-hover:opacity-100">
-        <button 
-          onClick={handleDownload}
-          className="bg-primary hover:bg-blue-600 text-white p-2 rounded-full shadow-lg transform translate-y-2 group-hover:translate-y-0 transition-all"
-          title="Download visualized image"
+      {/* Context Menu */}
+      {contextMenu && (
+        <div 
+          className="fixed z-50 bg-slate-800 border border-slate-700 rounded shadow-xl py-1 min-w-[160px] flex flex-col"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
         >
-          <Download className="w-5 h-5" />
-        </button>
-      </div>
+          <button 
+            onClick={handleDownload}
+            disabled={downloading}
+            className="text-left px-4 py-2 text-xs text-slate-200 hover:bg-slate-700 hover:text-white flex items-center gap-2 transition-colors w-full"
+          >
+            {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+            Save Visualization
+          </button>
+        </div>
+      )}
     </div>
   );
 };

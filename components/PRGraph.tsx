@@ -11,6 +11,7 @@ interface PRGraphProps {
 const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
   const [data, setData] = useState<PRPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hoveredPoint, setHoveredPoint] = useState<{x: number, y: number, data: PRPoint} | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,9 +32,9 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
   }, [items, config.iopThreshold]); // Re-compute when IoP changes
 
   // Chart Rendering Logic
-  const width = 800;
-  const height = 500;
-  const padding = 50;
+  const width = 600;  // Reduced base width for better scaling in sidebar
+  const height = 400; // Aspect ratio 3:2
+  const padding = 40;
   const chartW = width - padding * 2;
   const chartH = height - padding * 2;
 
@@ -43,28 +44,41 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
     return `${x},${y}`;
   }).join(' ');
 
+  const handleMouseEnter = (e: React.MouseEvent, p: PRPoint) => {
+      if (!containerRef.current) return;
+      
+      // Get exact position relative to the container
+      const rect = e.currentTarget.getBoundingClientRect();
+      const containerRect = containerRef.current.getBoundingClientRect();
+      
+      setHoveredPoint({
+          x: rect.left - containerRect.left + rect.width / 2,
+          y: rect.top - containerRect.top,
+          data: p
+      });
+  };
+
+  const handleMouseLeave = () => {
+      setHoveredPoint(null);
+  };
+
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-8 bg-background h-full overflow-hidden relative">
-      <div className="absolute top-4 left-4 bg-slate-800 p-4 rounded shadow-lg border border-slate-700 max-w-sm z-10">
-        <h3 className="text-lg font-bold text-white mb-2">Precision-Recall Curve</h3>
-        <p className="text-sm text-slate-300 mb-2">
-            <strong>IoP Threshold:</strong> {config.iopThreshold.toFixed(2)}
-        </p>
+    <div className="flex-1 flex flex-col items-center p-4 bg-surface/50 h-full overflow-hidden relative border-l border-slate-700">
+      <div className="w-full mb-4 flex-shrink-0">
+        <h3 className="text-sm font-bold text-white mb-1">Precision-Recall Curve</h3>
         <p className="text-xs text-slate-400">
-            <strong>Precision:</strong> % of Predictions that fall inside a GT.<br/>
-            <strong>Recall:</strong> % of GTs that have at least one prediction.<br/>
-            Plots performance across Confidence thresholds (0.0 - 1.0).
+            <strong>IoP:</strong> {config.iopThreshold.toFixed(2)} | <strong>Images:</strong> {items.length}
         </p>
       </div>
 
       {loading ? (
-        <div className="flex flex-col items-center gap-4">
-            <Loader2 className="w-12 h-12 text-primary animate-spin" />
-            <p className="text-slate-400">Analyzing dataset across confidence levels...</p>
+        <div className="flex flex-col items-center justify-center flex-1 gap-4">
+            <Loader2 className="w-8 h-8 text-primary animate-spin" />
+            <p className="text-xs text-slate-400">Calculating...</p>
         </div>
       ) : (
-        <div className="bg-slate-900 rounded-xl p-4 shadow-2xl border border-slate-700" ref={containerRef}>
-          <svg width={width} height={height} className="overflow-visible">
+        <div className="w-full flex-1 min-h-0 flex items-center justify-center relative" ref={containerRef}>
+          <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="w-full h-auto max-h-full overflow-visible">
             {/* Grid */}
             <g stroke="#334155" strokeWidth="1" strokeDasharray="4">
                {[0, 0.25, 0.5, 0.75, 1].map(v => (
@@ -82,15 +96,15 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
             <line x1={padding} y1={height - padding} x2={padding} y2={padding} stroke="#cbd5e1" strokeWidth="2" />
 
             {/* Labels */}
-            <text x={width / 2} y={height - 10} textAnchor="middle" fill="#94a3b8" fontSize="14">Recall (Unique GTs Found)</text>
-            <text x={15} y={height / 2} textAnchor="middle" fill="#94a3b8" fontSize="14" transform={`rotate(-90, 15, ${height/2})`}>Precision (Valid Preds)</text>
+            <text x={width / 2} y={height - 5} textAnchor="middle" fill="#94a3b8" fontSize="12">Recall</text>
+            <text x={10} y={height / 2} textAnchor="middle" fill="#94a3b8" fontSize="12" transform={`rotate(-90, 10, ${height/2})`}>Precision</text>
 
             {/* Curve */}
             <polyline 
                 points={pointsString} 
                 fill="none" 
                 stroke="#3b82f6" 
-                strokeWidth="3"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
             />
@@ -101,16 +115,39 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
                     key={i}
                     cx={padding + p.recall * chartW} 
                     cy={height - padding - p.precision * chartH} 
-                    r={4}
+                    r={3}
                     fill={p.confidence >= config.confThreshold ? "#ef4444" : "#3b82f6"} // Highlight current conf
-                    className="hover:r-6 transition-all cursor-pointer"
-                >
-                    <title>Conf: {p.confidence.toFixed(2)} | P: {p.precision.toFixed(3)} | R: {p.recall.toFixed(3)}</title>
-                </circle>
+                    className="hover:r-5 transition-all cursor-pointer opacity-70 hover:opacity-100"
+                    onMouseEnter={(e) => handleMouseEnter(e, p)}
+                    onMouseLeave={handleMouseLeave}
+                />
             ))}
           </svg>
+
+          {/* Hover Tooltip */}
+          {hoveredPoint && (
+              <div 
+                className="absolute bg-slate-900 border border-slate-700 shadow-xl rounded-lg p-2 text-xs pointer-events-none z-20 flex flex-col gap-1 w-32"
+                style={{
+                    left: hoveredPoint.x,
+                    top: hoveredPoint.y - 10, // Just above the mouse entry point
+                    transform: 'translate(-50%, -100%)' // Center horizontally, move up
+                }}
+              >
+                  <div className="flex justify-between text-slate-400"><span>Recall (X)</span> <span className="text-white font-mono">{hoveredPoint.data.recall.toFixed(3)}</span></div>
+                  <div className="flex justify-between text-slate-400"><span>Precision (Y)</span> <span className="text-white font-mono">{hoveredPoint.data.precision.toFixed(3)}</span></div>
+                  <div className="h-px bg-slate-700 my-1" />
+                  <div className="flex justify-between text-slate-400"><span>Conf</span> <span className="text-yellow-400 font-mono">{hoveredPoint.data.confidence.toFixed(2)}</span></div>
+                  <div className="flex justify-between text-slate-400"><span>F1</span> <span className="text-blue-400 font-mono">{hoveredPoint.data.f1.toFixed(3)}</span></div>
+              </div>
+          )}
+
         </div>
       )}
+      
+       <div className="mt-4 text-[10px] text-slate-500 w-full text-center flex-shrink-0">
+         Red dot indicates current Confidence Threshold ({config.confThreshold.toFixed(2)})
+       </div>
     </div>
   );
 };

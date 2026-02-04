@@ -1,13 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ImageViewer from './components/ImageViewer';
 import PRGraph from './components/PRGraph';
 import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection } from './types';
-import { ChevronLeft, ChevronRight, Inbox, Download, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut } from 'lucide-react';
 import { drawVisualization } from './utils/render';
 
 const DEFAULT_CONFIG: VisualizationConfig = {
-  iopThreshold: 0.5, // Changed default
+  iopThreshold: 0.5, 
   confThreshold: 0.25,
   styles: {
     tpPred: { color: '#4ade80', dashed: false }, // Green, Solid
@@ -15,8 +15,10 @@ const DEFAULT_CONFIG: VisualizationConfig = {
     fn:     { color: '#72f8ef', dashed: true },  // Blue/Cyan, Dashed
     fp:     { color: '#fbbf24', dashed: false }, // Amber, Solid
   },
-  lineWidth: 2,
+  lineWidth: 4,
+  labelFontSize: 23,
   gridSize: 9,
+  aspectRatio: '1:1', // Default to Square to avoid black bars on mixed content
   zoomLevel: 1.0,
   viewMode: 'grid'
 };
@@ -40,6 +42,10 @@ const App: React.FC = () => {
   const [collections, setCollections] = useState<FileCollection[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
+  
+  // Sidebar State
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const isDragging = useRef(false);
 
   // Active Project Accessors
   const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
@@ -166,44 +172,103 @@ const App: React.FC = () => {
   const handleDownloadPage = async () => {
     if (currentItems.length === 0) return;
     setIsDownloading(true);
+
     try {
+      // 1. Load all images to determine dimensions
+      const loadedData = await Promise.all(currentItems.map(async (item) => {
+         const url = URL.createObjectURL(item.file);
+         const img = new Image();
+         img.src = url;
+         await new Promise((resolve) => {
+             img.onload = resolve;
+             img.onerror = resolve; // Handle error gracefully
+         });
+         return { item, img, url };
+      }));
+
+      // 2. Configure Layout (Stitched High-Res)
       const cols = config.gridSize === 9 ? 3 : 4;
-      const rows = config.gridSize === 9 ? 3 : 4;
-      const cellWidth = 640;
-      const cellHeight = 360;
+      const targetCellWidth = 1600; // High resolution standard width
+      const gap = 80; // Large gap for separation
+
+      // 3. Organize Grid Rows
+      const rows: typeof loadedData[] = [];
+      let currentRow: typeof loadedData = [];
       
+      for (const data of loadedData) {
+        currentRow.push(data);
+        if (currentRow.length === cols) {
+            rows.push(currentRow);
+            currentRow = [];
+        }
+      }
+      if (currentRow.length > 0) rows.push(currentRow);
+
+      // 4. Calculate Dimensions (Adaptive Height)
+      let totalHeight = 0;
+      const rowConfigs = rows.map(row => {
+          // Calculate height for each item based on target width to maintain aspect ratio
+          const processedItems = row.map(data => {
+             const aspect = data.img.naturalWidth ? (data.img.naturalWidth / data.img.naturalHeight) : 1.77;
+             const height = Math.round(targetCellWidth / aspect);
+             return { ...data, width: targetCellWidth, height };
+          });
+          // Row height is determined by the tallest item in the row (to align grid)
+          const rowHeight = Math.max(...processedItems.map(i => i.height));
+          const y = totalHeight;
+          totalHeight += rowHeight + gap;
+          return { items: processedItems, rowHeight, y };
+      });
+      // Remove last gap
+      if (rowConfigs.length > 0) totalHeight -= gap;
+      
+      const totalWidth = (cols * targetCellWidth) + ((cols - 1) * gap);
+
+      // 5. Create Canvas
       const canvas = document.createElement('canvas');
-      canvas.width = cols * cellWidth;
-      canvas.height = rows * cellHeight;
+      canvas.width = totalWidth;
+      canvas.height = totalHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Could not create canvas context');
 
-      ctx.fillStyle = '#1e293b';
+      // Fill Background (Dark Border)
+      ctx.fillStyle = '#0f172a'; 
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      for (let i = 0; i < currentItems.length; i++) {
-        const item = currentItems[i];
-        const row = Math.floor(i / cols);
-        const col = i % cols;
-        const x = col * cellWidth;
-        const y = row * cellHeight;
+      // 6. Draw Items
+      for (const rowConfig of rowConfigs) {
+         for (let i = 0; i < rowConfig.items.length; i++) {
+             const { item, img, width, height } = rowConfig.items[i];
+             const x = i * (targetCellWidth + gap);
+             // Center vertically in the row strip
+             const y = rowConfig.y + (rowConfig.rowHeight - height) / 2;
 
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(0, 0, cellWidth, cellHeight);
-        ctx.beginPath();
-        ctx.rect(0, 0, cellWidth, cellHeight);
-        ctx.clip();
-        await drawVisualization(ctx, item, config, cellWidth, cellHeight);
-        ctx.restore();
+             ctx.save();
+             ctx.translate(x, y);
+             ctx.beginPath();
+             ctx.rect(0, 0, width, height);
+             ctx.clip(); // Clip to exact image area
+
+             const scaleFactor = width / (img.naturalWidth || width);
+
+             await drawVisualization(ctx, item, config, width, height, img, {
+                 fontSize: Math.round(config.labelFontSize * scaleFactor),
+                 forceLineWidth: Math.max(1, Math.round(config.lineWidth * scaleFactor))
+             });
+             
+             ctx.restore();
+         }
       }
 
+      // 7. Download
       const link = document.createElement('a');
       link.download = `page_${currentPage + 1}_${activeProject.name}.jpg`;
-      link.href = canvas.toDataURL('image/jpeg', 0.85);
+      link.href = canvas.toDataURL('image/jpeg', 0.92); // High Quality
       link.click();
+
+      // Cleanup
+      loadedData.forEach(d => URL.revokeObjectURL(d.url));
+
     } catch (e) {
       console.error("Failed to generate download", e);
       alert("Failed to generate download image");
@@ -215,6 +280,27 @@ const App: React.FC = () => {
   const gridClass = config.gridSize === 9 
     ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" 
     : "grid-cols-2 md:grid-cols-3 xl:grid-cols-4";
+  
+  // Resize Handler
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+        if (!isDragging.current) return;
+        const newWidth = document.body.clientWidth - e.clientX;
+        setSidebarWidth(Math.max(300, Math.min(newWidth, 800)));
+    };
+
+    const handleMouseUp = () => {
+        isDragging.current = false;
+        document.body.style.cursor = 'default';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -240,79 +326,123 @@ const App: React.FC = () => {
       />
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* Header (Only show nav if in grid mode) */}
-        {config.viewMode === 'grid' && (
-          <div className="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-surface shadow-sm z-10">
-            <div className="text-slate-300 text-sm flex items-center gap-4">
+        {/* Header - Sticky */}
+        <div className="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-surface shadow-sm z-10 flex-shrink-0">
+            {/* Left: Info */}
+            <div className="text-slate-300 text-sm flex items-center gap-4 w-1/3">
               <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700">
                 Project: <span className="text-white font-medium">{activeProject.name}</span>
               </div>
-              <div>
-                  Page <span className="text-white font-bold">{currentPage + 1}</span> of <span className="text-white font-bold">{totalPages || 1}</span>
-                  <span className="mx-2 text-slate-500">|</span>
-                  Total: {items.length}
-              </div>
+              {config.viewMode === 'grid' && (
+                <div>
+                    Page <span className="text-white font-bold">{currentPage + 1}</span> of <span className="text-white font-bold">{totalPages || 1}</span>
+                </div>
+              )}
             </div>
             
-            <div className="flex gap-4">
-              {items.length > 0 && (
-                <button
-                  onClick={handleDownloadPage}
-                  disabled={isDownloading}
-                  className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors"
-                >
-                  {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  Download Page
-                </button>
+            {/* Center: Zoom Controls */}
+            <div className="flex items-center justify-center gap-3 w-1/3">
+              {config.viewMode === 'grid' && (
+                 <div className="flex items-center gap-2 bg-slate-800/50 px-4 py-1.5 rounded-full border border-slate-700">
+                   <button onClick={() => setConfig({...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomOut className="w-3.5 h-3.5" /></button>
+                   <input 
+                     type="range" 
+                     min="0.5" max="3" step="0.1" 
+                     value={config.zoomLevel} 
+                     onChange={(e) => setConfig({...config, zoomLevel: parseFloat(e.target.value)})}
+                     className="w-32 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                   />
+                   <button onClick={() => setConfig({...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
+                   <span className="text-xs text-slate-400 font-mono w-10 text-right">{Math.round(config.zoomLevel * 100)}%</span>
+                 </div>
               )}
-
-              <div className="flex gap-2">
-                <button 
-                  onClick={prevPage} 
-                  disabled={currentPage === 0}
-                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
-                >
-                  <ChevronLeft />
-                </button>
-                <button 
-                  onClick={nextPage} 
-                  disabled={currentPage >= totalPages - 1}
-                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
-                >
-                  <ChevronRight />
-                </button>
-              </div>
             </div>
-          </div>
-        )}
+            
+            {/* Right: Actions */}
+            <div className="flex justify-end gap-4 w-1/3">
+              {config.viewMode === 'grid' && (
+                  <>
+                    {items.length > 0 && (
+                        <button
+                        onClick={handleDownloadPage}
+                        disabled={isDownloading}
+                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors"
+                        >
+                        {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        Download Page
+                        </button>
+                    )}
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-hidden bg-background relative">
-          {config.viewMode === 'pr-curve' ? (
-             <PRGraph items={items} config={config} />
-          ) : (
-            // Grid View with Zoom
-            <div className="w-full h-full overflow-auto custom-scrollbar p-6">
-              {items.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-500">
-                  <Inbox className="w-12 h-12 mb-4 opacity-50" />
-                  <p>No Images Selected</p>
-                </div>
+                    <div className="flex gap-2">
+                        <button 
+                        onClick={prevPage} 
+                        disabled={currentPage === 0}
+                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                        >
+                        <ChevronLeft />
+                        </button>
+                        <button 
+                        onClick={nextPage} 
+                        disabled={currentPage >= totalPages - 1}
+                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                        >
+                        <ChevronRight />
+                        </button>
+                    </div>
+                  </>
+              )}
+            </div>
+        </div>
+
+        {/* Main Content Split View */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left / Main: Grid or Full PR Graph */}
+          <div className="flex-1 overflow-hidden relative flex flex-col">
+              {config.viewMode === 'pr-curve' ? (
+                <PRGraph items={items} config={config} />
               ) : (
-                <div 
-                  className={`grid ${gridClass} gap-4 pb-10 origin-top-left transition-all duration-200 ease-out`}
-                  style={{ width: `${config.zoomLevel * 100}%` }}
-                >
-                  {currentItems.map((item) => (
-                    <ImageViewer 
-                      key={item.name} 
-                      item={item} 
-                      config={config} 
-                    />
-                  ))}
+                <div className="w-full h-full overflow-auto custom-scrollbar p-6">
+                  {items.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500">
+                      <Inbox className="w-12 h-12 mb-4 opacity-50" />
+                      <p>No Images Selected</p>
+                    </div>
+                  ) : (
+                    <div 
+                      className={`grid ${gridClass} gap-4 pb-10 origin-top-left transition-all duration-200 ease-out`}
+                      style={{ width: `${config.zoomLevel * 100}%` }}
+                    >
+                      {currentItems.map((item) => (
+                        <ImageViewer 
+                          key={item.name} 
+                          item={item} 
+                          config={config} 
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
+          </div>
+
+          {/* Right Sidebar: PR Graph (Visible in Grid Mode) */}
+          {config.viewMode === 'grid' && (
+            <>
+                <div 
+                    className="w-1 bg-slate-800 hover:bg-primary cursor-col-resize z-20 flex-shrink-0 transition-colors border-l border-slate-700"
+                    onMouseDown={(e) => {
+                        isDragging.current = true;
+                        document.body.style.cursor = 'col-resize';
+                        e.preventDefault();
+                    }}
+                />
+                <div 
+                    style={{ width: sidebarWidth }} 
+                    className="flex-shrink-0 bg-surface/30 border-l border-slate-700 overflow-hidden shadow-xl z-10 flex flex-col"
+                >
+                    <PRGraph items={items} config={config} />
+                </div>
+            </>
           )}
         </div>
       </div>

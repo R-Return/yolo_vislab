@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, Eye, BarChart2, ZoomIn, ZoomOut } from 'lucide-react';
+import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, LayoutGrid, Maximize, Square, RectangleHorizontal } from 'lucide-react';
 import { VisualizationConfig, Project, FileCollection, BoxStyle } from '../types';
 
 interface ControlPanelProps {
@@ -91,7 +91,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const labelCollections = collections.filter(c => c.type === 'labels');
 
   return (
-    <div className="w-80 h-screen bg-surface border-r border-slate-700 flex flex-col p-4 overflow-y-auto custom-scrollbar text-sm z-20 relative">
+    <div className="w-80 h-screen bg-surface border-r border-slate-700 flex flex-col p-4 overflow-y-auto custom-scrollbar text-sm z-20 relative flex-shrink-0">
       <div className="mb-6">
         <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
           <Monitor className="w-6 h-6 text-primary" />
@@ -100,42 +100,52 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         <p className="text-slate-400 text-xs mt-1">Research Visualization Tool</p>
       </div>
 
-      {/* Mode Switcher */}
-      <div className="mb-6 bg-slate-800 p-1 rounded-lg flex">
-        <button 
-          onClick={() => onConfigChange({...config, viewMode: 'grid'})}
-          className={`flex-1 py-2 rounded-md flex items-center justify-center gap-2 transition-colors ${config.viewMode === 'grid' ? 'bg-primary text-white shadow' : 'text-slate-400 hover:text-white'}`}
-        >
-          <Eye className="w-4 h-4" /> Grid
-        </button>
-        <button 
-          onClick={() => onConfigChange({...config, viewMode: 'pr-curve'})}
-          className={`flex-1 py-2 rounded-md flex items-center justify-center gap-2 transition-colors ${config.viewMode === 'pr-curve' ? 'bg-primary text-white shadow' : 'text-slate-400 hover:text-white'}`}
-        >
-          <BarChart2 className="w-4 h-4" /> PR Graph
-        </button>
-      </div>
+      {/* Layout Controls */}
+      <div className="mb-6 space-y-4">
+        {/* Grid Size & Aspect Ratio */}
+        <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Layout</span>
+          </div>
+          
+          {/* Grid Size Toggle */}
+          <div className="flex gap-2 mb-3">
+            <button 
+              onClick={() => onConfigChange({...config, gridSize: 9})}
+              className={`flex-1 py-1.5 px-2 rounded text-xs flex items-center justify-center gap-1 border ${config.gridSize === 9 ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-700 border-transparent text-slate-400'}`}
+            >
+              <LayoutGrid className="w-3 h-3" /> 3x3
+            </button>
+            <button 
+              onClick={() => onConfigChange({...config, gridSize: 16})}
+              className={`flex-1 py-1.5 px-2 rounded text-xs flex items-center justify-center gap-1 border ${config.gridSize === 16 ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-700 border-transparent text-slate-400'}`}
+            >
+              <LayoutGrid className="w-3 h-3" /> 4x4
+            </button>
+          </div>
 
-      {/* View Controls (Zoom) */}
-      {config.viewMode === 'grid' && (
-         <div className="mb-6">
-           <div className="flex justify-between items-center mb-2">
-             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Grid Zoom</span>
-             <span className="text-xs text-primary">{Math.round(config.zoomLevel * 100)}%</span>
-           </div>
-           <div className="flex items-center gap-2">
-             <button onClick={() => onConfigChange({...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1)})} className="p-1 hover:bg-slate-700 rounded text-slate-300"><ZoomOut className="w-4 h-4" /></button>
-             <input 
-               type="range" 
-               min="0.5" max="3" step="0.1" 
-               value={config.zoomLevel} 
-               onChange={(e) => onConfigChange({...config, zoomLevel: parseFloat(e.target.value)})}
-               className="flex-1 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-             />
-             <button onClick={() => onConfigChange({...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1)})} className="p-1 hover:bg-slate-700 rounded text-slate-300"><ZoomIn className="w-4 h-4" /></button>
-           </div>
-         </div>
-      )}
+          {/* Aspect Ratio Selector */}
+          <div className="grid grid-cols-4 gap-1">
+            {[
+              { id: '16:9', icon: RectangleHorizontal, label: '16:9' },
+              { id: '4:3', icon: RectangleHorizontal, label: '4:3' },
+              { id: '1:1', icon: Square, label: '1:1' },
+              { id: 'auto', icon: Maximize, label: 'Auto' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                // @ts-ignore
+                onClick={() => onConfigChange({...config, aspectRatio: opt.id})}
+                className={`flex flex-col items-center justify-center py-1 rounded border transition-colors ${config.aspectRatio === opt.id ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-700 border-transparent text-slate-400 hover:bg-slate-600'}`}
+                title={opt.label}
+              >
+                <opt.icon className="w-3 h-3 mb-0.5" />
+                <span className="text-[9px]">{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* Project Management */}
       <div className="space-y-4 mb-8">
@@ -276,6 +286,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           <div>
              <div className="flex justify-between mb-1"><label className="text-slate-300">Line Width</label><span className="text-xs text-primary">{config.lineWidth}px</span></div>
             <input type="range" min="1" max="10" step="1" value={config.lineWidth} onChange={(e) => onConfigChange({...config, lineWidth: parseInt(e.target.value)})} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
+          </div>
+          <div>
+             <div className="flex justify-between mb-1"><label className="text-slate-300">Label Size</label><span className="text-xs text-primary">{config.labelFontSize}px</span></div>
+            <input type="range" min="8" max="40" step="1" value={config.labelFontSize} onChange={(e) => onConfigChange({...config, labelFontSize: parseInt(e.target.value)})} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
           </div>
         </div>
 

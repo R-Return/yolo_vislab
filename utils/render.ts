@@ -1,5 +1,12 @@
-import { ImageItem, VisualizationConfig, BoxType, RenderResult } from '../types';
+import { ImageItem, VisualizationConfig, BoxType, RenderResult, RenderBox, HitRegion } from '../types';
 import { parseYoloFile, calculateMatches } from './yolo';
+
+export interface RenderOptions {
+  fontSize?: number;
+  forceLineWidth?: number;
+  highlightType?: BoxType | null;
+  preCalculatedBoxes?: RenderBox[];
+}
 
 /**
  * Draws the visualization for a single image onto a canvas context.
@@ -11,7 +18,8 @@ export const drawVisualization = async (
   config: VisualizationConfig,
   targetWidth: number,
   targetHeight: number,
-  img?: HTMLImageElement
+  img?: HTMLImageElement,
+  options?: RenderOptions
 ): Promise<RenderResult> => {
   // 1. Load Image
   let imageElement = img;
@@ -26,49 +34,89 @@ export const drawVisualization = async (
   // 2. Calculate Aspect Fit Dimensions
   const imgW = imageElement.naturalWidth;
   const imgH = imageElement.naturalHeight;
-  const scale = Math.min(targetWidth / imgW, targetHeight / imgH);
   
-  const drawW = imgW * scale;
-  const drawH = imgH * scale;
-  const offsetX = (targetWidth - drawW) / 2;
-  const offsetY = (targetHeight - drawH) / 2;
+  const targetRatio = targetWidth / targetHeight;
+  const imgRatio = imgW / imgH;
+  const isExactMatch = Math.abs(targetRatio - imgRatio) < 0.005;
 
-  // Clear background
-  ctx.fillStyle = '#1e293b'; // Slate 800
-  ctx.fillRect(0, 0, targetWidth, targetHeight);
+  let drawW, drawH, offsetX, offsetY;
+
+  if (isExactMatch) {
+    drawW = targetWidth;
+    drawH = targetHeight;
+    offsetX = 0;
+    offsetY = 0;
+  } else {
+    const scale = Math.min(targetWidth / imgW, targetHeight / imgH);
+    drawW = imgW * scale;
+    drawH = imgH * scale;
+    offsetX = (targetWidth - drawW) / 2;
+    offsetY = (targetHeight - drawH) / 2;
+    
+    ctx.fillStyle = '#1e293b'; 
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+  }
 
   // Draw Image
+  // Ensure alpha is reset for image
+  ctx.globalAlpha = 1.0;
   ctx.drawImage(imageElement, offsetX, offsetY, drawW, drawH);
 
-  // 3. Parse and Calculate Matches
-  const gtBoxes = item.gtFile ? await parseYoloFile(item.gtFile) : [];
-  const predBoxes = item.predFile ? await parseYoloFile(item.predFile) : [];
-  const renderBoxes = calculateMatches(gtBoxes, predBoxes, config);
+  // 3. Parse and Calculate Matches (or use cached)
+  let renderBoxes: RenderBox[] = [];
+  if (options?.preCalculatedBoxes) {
+    renderBoxes = options.preCalculatedBoxes;
+  } else {
+    const gtBoxes = item.gtFile ? await parseYoloFile(item.gtFile) : [];
+    const predBoxes = item.predFile ? await parseYoloFile(item.predFile) : [];
+    renderBoxes = calculateMatches(gtBoxes, predBoxes, config);
+  }
 
   // 4. Draw Boxes
-  ctx.lineWidth = config.lineWidth;
-  ctx.font = 'bold 16px sans-serif';
+  const lineWidth = options?.forceLineWidth ?? config.lineWidth;
+  const baseFontSize = options?.fontSize ?? config.labelFontSize ?? 14;
+  const highlightType = options?.highlightType;
+  
+  ctx.lineWidth = lineWidth;
+  ctx.font = `bold ${baseFontSize}px sans-serif`;
+
+  const scaleX = drawW / imgW;
+  const scaleY = drawH / imgH;
 
   renderBoxes.forEach((box) => {
+    // Logic: If highlightType is set, dim everything that doesn't match
+    let alpha = 1.0;
+    if (highlightType) {
+        if (box.type === highlightType) {
+            alpha = 1.0;
+        } else if (highlightType === BoxType.TP_PRED && box.type === BoxType.TP_GT) {
+            // If highlighting TP, also show matched GTs fully
+            alpha = 1.0;
+        } else {
+            alpha = 0.15; // Dimmed
+        }
+    }
+    
+    ctx.globalAlpha = alpha;
+
     // Transform coordinates: Normalized (0-1) -> Image Space -> Screen Space
     const boxX_img = (box.x - box.w / 2) * imgW;
     const boxY_img = (box.y - box.h / 2) * imgH;
     const boxW_img = box.w * imgW;
     const boxH_img = box.h * imgH;
 
-    const x = offsetX + boxX_img * scale;
-    const y = offsetY + boxY_img * scale;
-    const w = boxW_img * scale;
-    const h = boxH_img * scale;
+    const x = offsetX + boxX_img * scaleX;
+    const y = offsetY + boxY_img * scaleY;
+    const w = boxW_img * scaleX;
+    const h = boxH_img * scaleY;
 
     ctx.strokeStyle = box.color;
-    ctx.setLineDash(box.dashed ? [6, 4] : []); // Dash pattern 6px line, 4px space
+    ctx.setLineDash(box.dashed ? [lineWidth * 3, lineWidth * 2] : []); 
 
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.stroke();
     
-    // Reset Dash for text
     ctx.setLineDash([]);
 
     // Draw Labels
@@ -82,57 +130,87 @@ export const drawVisualization = async (
       label = `${box.type.replace('_PRED', '')} ${conf}`; 
     }
 
-    const textMetrics = ctx.measureText(label);
-    const textHeight = 16;
-    const padding = 4;
+    const padding = Math.max(2, baseFontSize * 0.2);
+    
+    ctx.save();
+    ctx.font = `bold ${baseFontSize}px sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.lineJoin = 'round';
+    
+    ctx.lineWidth = Math.max(2, baseFontSize * 0.2); 
+    ctx.strokeStyle = '#000000';
+    ctx.strokeText(label, x + padding, y + padding);
 
-    // Draw background for text
     ctx.fillStyle = box.color;
-    ctx.fillRect(x, y - textHeight - padding, textMetrics.width + padding * 2, textHeight + padding);
-
-    ctx.fillStyle = '#000000'; // Text color black for better contrast on bright box colors
-    ctx.fillText(label, x + padding, y - 4);
+    ctx.fillText(label, x + padding, y + padding);
+    
+    ctx.restore();
   });
 
-  // Clean up
+  // Clean up if we created the image locally
   if (!img) {
      URL.revokeObjectURL(imageElement.src);
   }
 
-  // Calculate stats based on PRED types mostly
-  // Note: TP_PRED count might be > GT count now.
+  // Calculate stats
   const stats = {
     tp: renderBoxes.filter((b) => b.type === BoxType.TP_PRED).length,
     fp: renderBoxes.filter((b) => b.type === BoxType.FP).length,
     fn: renderBoxes.filter((b) => b.type === BoxType.FN).length,
   };
 
-  // 5. Draw Stats in Top Right
+  // 5. Draw Stats & Capture Hit Regions
+  // Reset Alpha for UI elements
+  ctx.globalAlpha = 1.0;
+  
+  const statsFontSize = Math.max(10, baseFontSize * 0.8);
   const statsText = `TP:${stats.tp} FN:${stats.fn} FP:${stats.fp}`;
-  ctx.font = 'bold 14px monospace';
-  const statsWidth = ctx.measureText(statsText).width + 20;
+  ctx.font = `bold ${statsFontSize}px monospace`;
+  const statsWidth = ctx.measureText(statsText).width + (statsFontSize * 2);
+  const statsHeight = statsFontSize * 1.5;
   
-  // Background for stats
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-  ctx.fillRect(targetWidth - statsWidth - 10, 10, statsWidth, 24);
+  const statsX = targetWidth - statsWidth - 10;
+  const statsY = 10;
   
-  let currentX = targetWidth - statsWidth - 5;
-  const drawStat = (text: string, color: string) => {
+  ctx.save();
+  ctx.fillStyle = '#000000';
+  ctx.globalAlpha = 0.7;
+  ctx.fillRect(statsX, statsY, statsWidth, statsHeight);
+  ctx.restore();
+  
+  const hitRegions: HitRegion[] = [];
+  let currentX = statsX + statsFontSize * 0.5;
+
+  const drawStat = (text: string, color: string, type: BoxType) => {
       ctx.fillStyle = color;
-      ctx.fillText(text, currentX, 27);
-      currentX += ctx.measureText(text).width + 10;
+      ctx.fillText(text, currentX, statsY + statsFontSize);
+      
+      const w = ctx.measureText(text).width;
+      hitRegions.push({
+          type,
+          x: currentX,
+          y: statsY,
+          w: w,
+          h: statsHeight
+      });
+
+      currentX += w + (statsFontSize * 0.5);
   };
 
-  drawStat(`TP:${stats.tp}`, config.styles.tpPred.color);
-  drawStat(`FN:${stats.fn}`, config.styles.fn.color);
-  drawStat(`FP:${stats.fp}`, config.styles.fp.color);
+  drawStat(`TP:${stats.tp}`, config.styles.tpPred.color, BoxType.TP_PRED);
+  drawStat(`FN:${stats.fn}`, config.styles.fn.color, BoxType.FN);
+  drawStat(`FP:${stats.fp}`, config.styles.fp.color, BoxType.FP);
 
-  // 6. Draw Filename in Top Left
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-  const nameWidth = ctx.measureText(item.name).width + 16;
-  ctx.fillRect(10, 10, nameWidth, 24);
+  // 6. Draw Filename
+  ctx.save();
+  ctx.fillStyle = '#000000';
+  ctx.globalAlpha = 0.7;
+  const nameWidth = ctx.measureText(item.name).width + (statsFontSize * 2);
+  ctx.fillRect(10, 10, nameWidth, statsHeight);
+  ctx.restore();
+  
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(item.name, 18, 27);
+  ctx.fillText(item.name, 10 + statsFontSize * 0.5, 10 + statsFontSize);
 
-  return { stats };
+  return { stats, hitRegions, boxes: renderBoxes };
 };

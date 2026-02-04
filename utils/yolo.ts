@@ -53,8 +53,9 @@ const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
 };
 
 /**
- * Processes GT and Pred boxes using IoP and Many-to-One matching.
- * Multiple Predictions can match the same GT (all counted as TPs).
+ * Processes GT and Pred boxes using IoP and Relaxed Matching.
+ * One Prediction can match multiple GTs (One-to-Many).
+ * Multiple Predictions can match the same GT (Many-to-One).
  */
 export const calculateMatches = (
   gtBoxes: BoundingBox[],
@@ -70,43 +71,28 @@ export const calculateMatches = (
 
   // 1. Check every prediction against all GTs
   sortedPreds.forEach((pred) => {
-    let bestIoP = 0;
-    let bestGtIdx = -1;
+    let isTp = false;
 
     gtBoxes.forEach((gt, gtIdx) => {
-      // We do NOT check if GT is already matched. Multiple preds can match one GT.
       if (gt.classId !== pred.classId) return; 
 
       const iop = calculateIoP(pred, gt);
-      if (iop > bestIoP) {
-        bestIoP = iop;
-        bestGtIdx = gtIdx;
+      // Relaxed Matching: If IoP is good, it counts. 
+      // One pred can 'hit' multiple GTs.
+      if (iop >= config.iopThreshold) {
+        isTp = true;
+        matchedGtIndices.add(gtIdx);
       }
     });
 
-    if (bestIoP >= config.iopThreshold && bestGtIdx !== -1) {
+    if (isTp) {
       // True Positive Prediction
-      matchedGtIndices.add(bestGtIdx); // Mark GT as "found" for FN calculation
-      
       result.push({ 
         ...pred, 
         type: BoxType.TP_PRED, 
         color: config.styles.tpPred.color,
         dashed: config.styles.tpPred.dashed
       });
-
-      // Add the matched GT for visualization context
-      // We might add the same GT multiple times if multiple preds match it, 
-      // but Render loop should handle overdraw (or we can dedupe here).
-      // Let's allow overdraw to ensure every TP_PRED has a visual partner pair.
-      const matchedGt = gtBoxes[bestGtIdx];
-      result.push({
-        ...matchedGt,
-        type: BoxType.TP_GT,
-        color: config.styles.tpGt.color,
-        dashed: config.styles.tpGt.dashed
-      });
-
     } else {
       // False Positive Prediction (Not inside any GT)
       result.push({ 
@@ -118,9 +104,16 @@ export const calculateMatches = (
     }
   });
 
-  // 2. Determine False Negatives (GTs that were never hit)
+  // 2. Add GTs (TP_GT or FN)
   gtBoxes.forEach((gt, idx) => {
-    if (!matchedGtIndices.has(idx)) {
+    if (matchedGtIndices.has(idx)) {
+      result.push({ 
+        ...gt, 
+        type: BoxType.TP_GT, 
+        color: config.styles.tpGt.color,
+        dashed: config.styles.tpGt.dashed
+      });
+    } else {
       result.push({ 
         ...gt, 
         type: BoxType.FN, 

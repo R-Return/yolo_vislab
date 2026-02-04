@@ -1,0 +1,5 @@
+{
+  "name": "YOLO VisLab",
+  "description": "A professional visualization tool for YOLO object detection research. visualize True Positives, False Negatives, and False Positives with configurable parameters.",
+  "requestFramePermissions": []
+}

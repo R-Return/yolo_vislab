@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ImageItem, VisualizationConfig } from '../types';
 import { calculatePRStats, PRPoint } from '../utils/yolo';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Download } from 'lucide-react';
 
 interface PRGraphProps {
   items: ImageItem[];
@@ -13,6 +13,7 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
   const [loading, setLoading] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState<{x: number, y: number, data: PRPoint} | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
     const compute = async () => {
@@ -62,13 +63,52 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
       setHoveredPoint(null);
   };
 
+  const handleDownload = () => {
+      if (!svgRef.current || data.length === 0) return;
+      
+      const svgData = new XMLSerializer().serializeToString(svgRef.current);
+      const canvas = document.createElement("canvas");
+      // Scale up for better quality
+      const scale = 2;
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const ctx = canvas.getContext("2d");
+      
+      if (!ctx) return;
+      
+      // Draw background since SVG is transparent
+      ctx.fillStyle = "#1e293b"; // Dark slate background matches app theme
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      const img = new Image();
+      img.onload = () => {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const link = document.createElement('a');
+          link.download = 'pr-curve.png';
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+      };
+      // Handle special characters
+      img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+  };
+
   return (
     <div className="flex-1 flex flex-col items-center p-4 bg-surface/50 h-full overflow-hidden relative border-l border-slate-700">
-      <div className="w-full mb-4 flex-shrink-0">
-        <h3 className="text-sm font-bold text-white mb-1">Precision-Recall Curve</h3>
-        <p className="text-xs text-slate-400">
-            <strong>IoP:</strong> {config.iopThreshold.toFixed(2)} | <strong>Images:</strong> {items.length}
-        </p>
+      <div className="w-full mb-4 flex-shrink-0 flex justify-between items-start">
+        <div>
+            <h3 className="text-sm font-bold text-white mb-1">Precision-Recall Curve</h3>
+            <p className="text-xs text-slate-400">
+                <strong>IoP:</strong> {config.iopThreshold.toFixed(2)} | <strong>Images:</strong> {items.length}
+            </p>
+        </div>
+        <button 
+            onClick={handleDownload}
+            disabled={loading || data.length === 0}
+            className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors disabled:opacity-30"
+            title="Download Graph Image"
+        >
+            <Download className="w-4 h-4" />
+        </button>
       </div>
 
       {loading ? (
@@ -78,7 +118,7 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
         </div>
       ) : (
         <div className="w-full flex-1 min-h-0 flex items-center justify-center relative" ref={containerRef}>
-          <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="w-full h-auto max-h-full overflow-visible">
+          <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="w-full h-auto max-h-full overflow-visible">
             {/* Grid */}
             <g stroke="#334155" strokeWidth="1" strokeDasharray="4">
                {[0, 0.25, 0.5, 0.75, 1].map(v => (

@@ -25,7 +25,8 @@ export const parseYoloFile = async (file: File): Promise<BoundingBox[]> => {
 
 /**
  * Calculates Intersection over Prediction (IoP).
- * Denominator is Area of Prediction Box.
+ * Denominator is min(Area of Prediction Box, Area of GT Box).
+ * This helps match cases where a small GT is inside a large Prediction (or vice versa).
  */
 const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
   const b1_x1 = pred.x - pred.w / 2;
@@ -46,10 +47,14 @@ const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
   if (x2 < x1 || y2 < y1) return 0.0;
 
   const intersectionArea = (x2 - x1) * (y2 - y1);
-  const predArea = (b1_x2 - b1_x1) * (b1_y2 - b1_y1);
+  
+  const predArea = pred.w * pred.h;
+  const gtArea = gt.w * gt.h;
 
-  if (predArea === 0) return 0;
-  return intersectionArea / predArea;
+  const denominator = Math.min(predArea, gtArea);
+
+  if (denominator === 0) return 0;
+  return intersectionArea / denominator;
 };
 
 /**

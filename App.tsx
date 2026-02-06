@@ -2,9 +2,10 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ImageViewer from './components/ImageViewer';
 import PRGraph from './components/PRGraph';
-import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection } from './types';
-import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut } from 'lucide-react';
+import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType } from './types';
+import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle } from 'lucide-react';
 import { drawVisualization } from './utils/render';
+import { parseYoloFile, calculateMatches } from './utils/yolo';
 
 const DEFAULT_CONFIG: VisualizationConfig = {
   iopThreshold: 0.5, 
@@ -42,6 +43,13 @@ const App: React.FC = () => {
   const [collections, setCollections] = useState<FileCollection[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
+  
+  // Page Stats & Highlight State
+  const [pageStats, setPageStats] = useState({ tp: 0, fp: 0, fn: 0 });
+  const [globalHighlight, setGlobalHighlight] = useState<BoxType | null>(null);
+
+  // Jump Page State
+  const [jumpPageInput, setJumpPageInput] = useState("1");
   
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(250);
@@ -166,8 +174,60 @@ const App: React.FC = () => {
     (currentPage + 1) * config.gridSize
   );
 
+  // Sync jump input with current page
+  useEffect(() => {
+    setJumpPageInput((currentPage + 1).toString());
+  }, [currentPage]);
+
+  // Calculate Page Stats
+  useEffect(() => {
+    let active = true;
+    const calcStats = async () => {
+      if (currentItems.length === 0) {
+        if (active) setPageStats({ tp: 0, fp: 0, fn: 0 });
+        return;
+      }
+
+      const totals = { tp: 0, fp: 0, fn: 0 };
+      
+      await Promise.all(currentItems.map(async (item) => {
+        const gtBoxes = item.gtFile ? await parseYoloFile(item.gtFile) : [];
+        const predBoxes = item.predFile ? await parseYoloFile(item.predFile) : [];
+        const result = calculateMatches(gtBoxes, predBoxes, config);
+        
+        result.forEach(b => {
+           if (b.type === BoxType.TP_PRED) totals.tp++;
+           else if (b.type === BoxType.FP) totals.fp++;
+           else if (b.type === BoxType.FN) totals.fn++;
+        });
+      }));
+
+      if (active) setPageStats(totals);
+    };
+
+    calcStats();
+    return () => { active = false; };
+  }, [currentItems, config.iopThreshold, config.confThreshold]);
+
+
   const nextPage = () => setCurrentPage(p => Math.min(p + 1, totalPages - 1));
   const prevPage = () => setCurrentPage(p => Math.max(p - 1, 0));
+  
+  const randomPage = () => {
+      if (totalPages <= 1) return;
+      const rnd = Math.floor(Math.random() * totalPages);
+      setCurrentPage(rnd);
+  };
+
+  const handlePageJump = (e: React.FormEvent) => {
+      e.preventDefault();
+      const pageNum = parseInt(jumpPageInput, 10);
+      if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
+          setCurrentPage(pageNum - 1);
+      } else {
+          setJumpPageInput((currentPage + 1).toString()); // Reset on invalid
+      }
+  };
 
   const handleDownloadPage = async () => {
     if (currentItems.length === 0) return;
@@ -328,45 +388,85 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Header - Sticky */}
         <div className="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-surface shadow-sm z-10 flex-shrink-0">
-            {/* Left: Info */}
-            <div className="text-slate-300 text-sm flex items-center gap-4 w-1/3">
-              <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700">
+            {/* Left: Info & Page Jump */}
+            <div className="text-slate-300 text-sm flex items-center gap-4 flex-1 min-w-0">
+              <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700 flex-shrink-0">
                 Project: <span className="text-white font-medium">{activeProject.name}</span>
               </div>
               {config.viewMode === 'grid' && (
-                <div>
-                    Page <span className="text-white font-bold">{currentPage + 1}</span> of <span className="text-white font-bold">{totalPages || 1}</span>
-                </div>
+                <form onSubmit={handlePageJump} className="flex items-center gap-2 text-slate-400 flex-shrink-0">
+                    <span>Page</span>
+                    <input 
+                      type="number" 
+                      value={jumpPageInput}
+                      onChange={(e) => setJumpPageInput(e.target.value)}
+                      onBlur={() => handlePageJump({ preventDefault: () => {} } as any)}
+                      className="w-16 bg-slate-800 border border-slate-700 rounded text-center text-white focus:outline-none focus:border-primary text-sm py-1"
+                    />
+                    <span>of <span className="text-white font-bold">{totalPages || 1}</span></span>
+                </form>
               )}
             </div>
             
-            {/* Center: Zoom Controls */}
-            <div className="flex items-center justify-center gap-3 w-1/3">
-              {config.viewMode === 'grid' && (
-                 <div className="flex items-center gap-2 bg-slate-800/50 px-4 py-1.5 rounded-full border border-slate-700">
-                   <button onClick={() => setConfig({...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomOut className="w-3.5 h-3.5" /></button>
-                   <input 
-                     type="range" 
-                     min="0.5" max="3" step="0.1" 
-                     value={config.zoomLevel} 
-                     onChange={(e) => setConfig({...config, zoomLevel: parseFloat(e.target.value)})}
-                     className="w-32 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                   />
-                   <button onClick={() => setConfig({...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
-                   <span className="text-xs text-slate-400 font-mono w-10 text-right">{Math.round(config.zoomLevel * 100)}%</span>
-                 </div>
+            {/* Center: Global Stats & Zoom */}
+            <div className="flex items-center justify-center gap-6 flex-shrink-0 mx-4">
+              {config.viewMode === 'grid' && items.length > 0 && (
+                 <>
+                   {/* Global Stats with Highlight */}
+                   <div className="flex items-center gap-4 bg-slate-800/80 px-5 py-2 rounded-full border border-slate-700 shadow-sm">
+                      <div 
+                        onMouseEnter={() => setGlobalHighlight(BoxType.TP_PRED)}
+                        onMouseLeave={() => setGlobalHighlight(null)}
+                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                        style={{ color: config.styles.tpPred.color }}
+                      >
+                          <span className="font-bold mr-1">TP:</span>{pageStats.tp}
+                      </div>
+                      <div className="w-px h-4 bg-slate-600"></div>
+                      <div 
+                        onMouseEnter={() => setGlobalHighlight(BoxType.FN)}
+                        onMouseLeave={() => setGlobalHighlight(null)}
+                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                        style={{ color: config.styles.fn.color }}
+                      >
+                          <span className="font-bold mr-1">FN:</span>{pageStats.fn}
+                      </div>
+                      <div className="w-px h-4 bg-slate-600"></div>
+                      <div 
+                        onMouseEnter={() => setGlobalHighlight(BoxType.FP)}
+                        onMouseLeave={() => setGlobalHighlight(null)}
+                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                        style={{ color: config.styles.fp.color }}
+                      >
+                          <span className="font-bold mr-1">FP:</span>{pageStats.fp}
+                      </div>
+                   </div>
+
+                   {/* Zoom */}
+                   <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-2 rounded-full border border-slate-700">
+                     <button onClick={() => setConfig({...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomOut className="w-3.5 h-3.5" /></button>
+                     <input 
+                       type="range" 
+                       min="0.5" max="3" step="0.1" 
+                       value={config.zoomLevel} 
+                       onChange={(e) => setConfig({...config, zoomLevel: parseFloat(e.target.value)})}
+                       className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                     />
+                     <button onClick={() => setConfig({...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
+                   </div>
+                 </>
               )}
             </div>
             
             {/* Right: Actions */}
-            <div className="flex justify-end gap-4 w-1/3">
+            <div className="flex justify-end gap-4 flex-1 min-w-0">
               {config.viewMode === 'grid' && (
                   <>
                     {items.length > 0 && (
                         <button
                         onClick={handleDownloadPage}
                         disabled={isDownloading}
-                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors"
+                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20 whitespace-nowrap"
                         >
                         {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                         Download Page
@@ -378,15 +478,27 @@ const App: React.FC = () => {
                         onClick={prevPage} 
                         disabled={currentPage === 0}
                         className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                        title="Previous Page"
                         >
-                        <ChevronLeft />
+                        <ChevronLeft className="w-5 h-5" />
                         </button>
+                        
+                        <button
+                        onClick={randomPage}
+                        disabled={totalPages <= 1}
+                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                        title="Random Page"
+                        >
+                        <Shuffle className="w-5 h-5" />
+                        </button>
+
                         <button 
                         onClick={nextPage} 
                         disabled={currentPage >= totalPages - 1}
                         className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                        title="Next Page"
                         >
-                        <ChevronRight />
+                        <ChevronRight className="w-5 h-5" />
                         </button>
                     </div>
                   </>
@@ -416,7 +528,8 @@ const App: React.FC = () => {
                         <ImageViewer 
                           key={item.name} 
                           item={item} 
-                          config={config} 
+                          config={config}
+                          externalHighlight={globalHighlight}
                         />
                       ))}
                     </div>

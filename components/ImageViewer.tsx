@@ -6,9 +6,10 @@ import { drawVisualization } from '../utils/render';
 interface ImageViewerProps {
   item: ImageItem;
   config: VisualizationConfig;
+  externalHighlight?: BoxType | null;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -23,7 +24,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
   const [downloading, setDownloading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   
-  // Highlight interaction
+  // Highlight interaction (Local)
   const [hoveredStat, setHoveredStat] = useState<BoxType | null>(null);
 
   // Close context menu on global click
@@ -92,6 +93,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
       const ctx = canvasRef.current.getContext('2d');
       if (!ctx) return;
 
+      // Determine which highlight to use (Local hover takes precedence, then global)
+      const activeHighlight = hoveredStat || externalHighlight;
+
       // Fast re-render using cached image and boxes
       drawVisualization(
           ctx, 
@@ -102,11 +106,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config }) => {
           cachedData.img,
           {
               preCalculatedBoxes: cachedData.boxes,
-              highlightType: hoveredStat
+              highlightType: activeHighlight
           }
       );
 
-  }, [hoveredStat, cachedData, config, item]);
+  }, [hoveredStat, externalHighlight, cachedData, config, item]);
 
 
   const handleDownload = async () => {

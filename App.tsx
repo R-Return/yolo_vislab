@@ -407,9 +407,6 @@ const App: React.FC = () => {
         <div className="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-surface shadow-sm z-10 flex-shrink-0">
           {/* Left: Info & Page Jump */}
           <div className="text-slate-300 text-sm flex items-center gap-4 flex-1 min-w-0">
-            <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700 flex-shrink-0">
-              Project: <span className="text-white font-medium">{activeProject.name}</span>
-            </div>
             {config.viewMode === 'grid' && (
               <form onSubmit={handlePageJump} className="flex items-center gap-2 text-slate-400 flex-shrink-0">
                 <span>Page</span>
@@ -483,10 +480,10 @@ const App: React.FC = () => {
                   <button
                     onClick={handleDownloadPage}
                     disabled={isDownloading}
-                    className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20 whitespace-nowrap"
+                    className="bg-primary hover:bg-blue-600 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20"
+                    title="Download Page"
                   >
-                    {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                    Download Page
+                    {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
                   </button>
                 )}
 

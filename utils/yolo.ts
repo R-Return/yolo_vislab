@@ -4,10 +4,17 @@ import { BoundingBox, BoxType, RenderBox, VisualizationConfig, ImageItem } from 
  * Parses a YOLO format string into BoundingBox objects.
  * Format: <class_id> <cx> <cy> <w> <h> [confidence]
  */
-export const parseYoloFile = async (file: File): Promise<BoundingBox[]> => {
-  const text = await file.text();
+export const parseYoloFile = async (file: File | FileSystemFileHandle): Promise<BoundingBox[]> => {
+  let text = '';
+  if (file instanceof File) {
+    text = await file.text();
+  } else {
+    const f = await (file as FileSystemFileHandle).getFile();
+    text = await f.text();
+  }
+
   const lines = text.trim().split('\n');
-  
+
   return lines
     .map((line): BoundingBox | null => {
       const parts = line.trim().split(/\s+/);
@@ -22,6 +29,19 @@ export const parseYoloFile = async (file: File): Promise<BoundingBox[]> => {
       };
     })
     .filter((box): box is BoundingBox => box !== null);
+};
+
+/**
+ * Reads all .txt files from a FileMap and parses them into a LabelMap.
+ */
+export const preloadLabels = async (fileMap: { [name: string]: File | FileSystemFileHandle }): Promise<{ [name: string]: BoundingBox[] }> => {
+  const labelMap: { [name: string]: BoundingBox[] } = {};
+  await Promise.all(Object.entries(fileMap).map(async ([name, file]) => {
+    if (name.endsWith('.txt')) {
+      labelMap[name] = await parseYoloFile(file);
+    }
+  }));
+  return labelMap;
 };
 
 /**
@@ -48,7 +68,7 @@ const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
   if (x2 < x1 || y2 < y1) return 0.0;
 
   const intersectionArea = (x2 - x1) * (y2 - y1);
-  
+
   // CHANGE: Denominator is strictly the Prediction Area
   const predArea = pred.w * pred.h;
 
@@ -72,7 +92,7 @@ export const calculateMatches = (
 ): RenderBox[] => {
   const result: RenderBox[] = [];
   const matchedGtIndices = new Set<number>();
-  
+
   const validPreds = predBoxes.filter(p => (p.confidence || 1) >= config.confThreshold);
   // Sort preds by confidence (High -> Low)
   const sortedPreds = [...validPreds].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
@@ -82,10 +102,10 @@ export const calculateMatches = (
     let isTp = false;
 
     gtBoxes.forEach((gt, gtIdx) => {
-      if (gt.classId !== pred.classId) return; 
+      if (gt.classId !== pred.classId) return;
 
       const iop = calculateIoP(pred, gt);
-      
+
       // Visualization Logic: Any match counts as a "Correct Prediction" visually
       if (iop >= config.iopThreshold) {
         isTp = true;
@@ -95,17 +115,17 @@ export const calculateMatches = (
 
     if (isTp) {
       // True Positive Prediction (Matches at least one GT)
-      result.push({ 
-        ...pred, 
-        type: BoxType.TP_PRED, 
+      result.push({
+        ...pred,
+        type: BoxType.TP_PRED,
         color: config.styles.tpPred.color,
         dashed: config.styles.tpPred.dashed
       });
     } else {
       // False Positive Prediction (No overlap with any GT)
-      result.push({ 
-        ...pred, 
-        type: BoxType.FP, 
+      result.push({
+        ...pred,
+        type: BoxType.FP,
         color: config.styles.fp.color,
         dashed: config.styles.fp.dashed
       });
@@ -115,16 +135,16 @@ export const calculateMatches = (
   // 2. Add GTs (TP_GT or FN)
   gtBoxes.forEach((gt, idx) => {
     if (matchedGtIndices.has(idx)) {
-      result.push({ 
-        ...gt, 
-        type: BoxType.TP_GT, 
+      result.push({
+        ...gt,
+        type: BoxType.TP_GT,
         color: config.styles.tpGt.color,
         dashed: config.styles.tpGt.dashed
       });
     } else {
-      result.push({ 
-        ...gt, 
-        type: BoxType.FN, 
+      result.push({
+        ...gt,
+        type: BoxType.FN,
         color: config.styles.fn.color,
         dashed: config.styles.fn.dashed
       });
@@ -159,16 +179,15 @@ export const calculatePRStats = async (
   iopThreshold: number
 ): Promise<PRPoint[]> => {
   // 1. Gather all GTs and Preds from all items
-  // We need to keep track of which image they belong to for matching
-  const dataset = await Promise.all(items.map(async (item, imgIdx) => {
-    const gts = item.gtFile ? await parseYoloFile(item.gtFile) : [];
-    const preds = item.predFile ? await parseYoloFile(item.predFile) : [];
-    return { 
+  const dataset = items.map((item, imgIdx) => {
+    const gts = item.gtData || [];
+    const preds = item.predData || [];
+    return {
       imgIdx,
-      gts: gts.map(g => ({ ...g, used: false })), // 'used' flag isn't strictly needed here as we reset per threshold
-      preds: preds.map(p => ({ ...p, imgIdx }))   // flatten preds with image index
+      gts: gts.map(g => ({ ...g, used: false })),
+      preds: preds.map(p => ({ ...p, imgIdx }))
     };
-  }));
+  });
 
   const allPreds = dataset.flatMap(d => d.preds);
   const totalGtCount = dataset.reduce((acc, d) => acc + d.gts.length, 0);
@@ -180,12 +199,12 @@ export const calculatePRStats = async (
 
   // 2. Generate Thresholds (Sampling)
   // Use 50 steps for smoother curve (similar to Python's dense plot)
-  const steps = 50; 
+  const steps = 50;
   const rawResults: PRPoint[] = [];
 
   for (let i = 0; i <= steps; i++) {
     const confThreshold = i / steps;
-    
+
     // Filter predictions for this threshold
     // Note: They remain sorted by confidence
     const validPreds = allPreds.filter(p => (p.confidence || 0) >= confThreshold);
@@ -193,7 +212,7 @@ export const calculatePRStats = async (
     // Track detected GTs PER IMAGE for this threshold level
     // Map<ImageIndex, Set<GtIndex>>
     const detectedGtsMap = new Map<number, Set<number>>();
-    
+
     let tp = 0;
     let fp = 0;
 
@@ -216,7 +235,7 @@ export const calculatePRStats = async (
         if (gt.classId !== pred.classId) return;
 
         const iop = calculateIoP(pred, gt);
-        
+
         if (iop >= iopThreshold) {
           matchedAnyGt = true;
           // Check if this GT was already found by a higher confidence pred
@@ -256,10 +275,10 @@ export const calculatePRStats = async (
   // 3. Monotonic Smoothing (Envelope)
   // Logic: Precision should not increase as Recall decreases.
   // We iterate backwards (from Recall=1 to Recall=0) and keep the max precision seen so far.
-  
+
   // Sort by Recall Descending first (roughly equivalent to Conf ascending)
   // But strictly, we process the list such that for a given recall R, P is max(P(r)) for all r >= R
-  
+
   // Sort by Confidence Descending (High Conf -> Low Recall, High Precision)
   rawResults.sort((a, b) => b.confidence - a.confidence);
 
@@ -280,7 +299,7 @@ export const calculatePRStats = async (
       f1: 0.0
     });
   }
-  
+
   // Ensure the last point drops to 0 if needed (optional, depends on preference)
   // Usually for PR curves we just want the envelope.
 

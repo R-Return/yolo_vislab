@@ -46,14 +46,18 @@ export interface VisualizationConfig {
 }
 
 export interface FileMap {
-  [filename: string]: File;
+  [filename: string]: File | FileSystemFileHandle;
+}
+
+export interface LabelMap {
+  [filename: string]: BoundingBox[];
 }
 
 export interface ImageItem {
   name: string;
-  file: File;
-  gtFile?: File;
-  predFile?: File;
+  file: File | FileSystemFileHandle;
+  gtData?: BoundingBox[];
+  predData?: BoundingBox[];
 }
 
 export interface FileCollection {
@@ -61,6 +65,7 @@ export interface FileCollection {
   name: string;
   type: 'images' | 'labels';
   files: FileMap;
+  labels?: LabelMap; // Pre-loaded labels
   count: number;
 }
 
@@ -72,7 +77,7 @@ export interface Project {
   imageCollectionId: string | null;
   gtCollectionId: string | null;
   // Project-Specific Data
-  predFiles: FileMap;
+  predLabels: LabelMap; // Pre-loaded
 }
 
 export interface HitRegion {

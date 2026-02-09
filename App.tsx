@@ -2,19 +2,19 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ImageViewer from './components/ImageViewer';
 import PRGraph from './components/PRGraph';
-import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType } from './types';
-import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle } from 'lucide-react';
+import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap } from './types';
+import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle, PanelRight } from 'lucide-react';
 import { drawVisualization } from './utils/render';
-import { parseYoloFile, calculateMatches } from './utils/yolo';
+import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
 
 const DEFAULT_CONFIG: VisualizationConfig = {
-  iopThreshold: 0.5, 
+  iopThreshold: 0.5,
   confThreshold: 0.25,
   styles: {
     tpPred: { color: '#4ade80', dashed: false }, // Green, Solid
-    tpGt:   { color: '#ffffff', dashed: true },  // White, Dashed
-    fn:     { color: '#72f8ef', dashed: true },  // Blue/Cyan, Dashed
-    fp:     { color: '#fbbf24', dashed: false }, // Amber, Solid
+    tpGt: { color: '#ffffff', dashed: true },  // White, Dashed
+    fn: { color: '#72f8ef', dashed: true },  // Blue/Cyan, Dashed
+    fp: { color: '#fbbf24', dashed: false }, // Amber, Solid
   },
   lineWidth: 4,
   labelFontSize: 23,
@@ -34,7 +34,7 @@ const createProject = (name: string): Project => ({
   config: { ...DEFAULT_CONFIG },
   imageCollectionId: null,
   gtCollectionId: null,
-  predFiles: {}, // Local
+  predLabels: {}, // Local
 });
 
 const App: React.FC = () => {
@@ -43,16 +43,17 @@ const App: React.FC = () => {
   const [collections, setCollections] = useState<FileCollection[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
-  
+
   // Page Stats & Highlight State
   const [pageStats, setPageStats] = useState({ tp: 0, fp: 0, fn: 0 });
   const [globalHighlight, setGlobalHighlight] = useState<BoxType | null>(null);
 
   // Jump Page State
   const [jumpPageInput, setJumpPageInput] = useState("1");
-  
+
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const isDragging = useRef(false);
 
   // Active Project Accessors
@@ -60,15 +61,15 @@ const App: React.FC = () => {
   const { config } = activeProject;
 
   // Resolve Files from Collections
-  const imageFiles = useMemo(() => 
-    collections.find(c => c.id === activeProject.imageCollectionId)?.files || {}, 
-  [collections, activeProject.imageCollectionId]);
+  const imageFiles = useMemo(() =>
+    collections.find(c => c.id === activeProject.imageCollectionId)?.files || {},
+    [collections, activeProject.imageCollectionId]);
 
-  const gtFiles = useMemo(() => 
-    collections.find(c => c.id === activeProject.gtCollectionId)?.files || {}, 
-  [collections, activeProject.gtCollectionId]);
+  const gtLabels = useMemo(() =>
+    collections.find(c => c.id === activeProject.gtCollectionId)?.labels || {},
+    [collections, activeProject.gtCollectionId]);
 
-  const predFiles = activeProject.predFiles;
+  const predLabels = activeProject.predLabels;
 
   // State Updates
   const updateProject = (updates: Partial<Project>) => {
@@ -76,63 +77,85 @@ const App: React.FC = () => {
   };
 
   const setConfig = (newConfig: VisualizationConfig) => updateProject({ config: newConfig });
-  
-  // File Loading Helper
-  const processFiles = (files: FileList) => {
-    const map: FileMap = {};
-    Array.from(files).forEach(file => {
-      if (!file.name.startsWith('.')) map[file.name] = file;
-    });
-    return map;
-  };
+
 
   // Collection Management
-  const handleImportCollection = (type: 'images' | 'labels', files: FileList) => {
-    if (files.length === 0) return;
-    const fileMap = processFiles(files);
-    const count = Object.keys(fileMap).length;
-    if (count === 0) return;
+  const handleImportCollection = async (type: 'images' | 'labels') => {
+    try {
+      // @ts-ignore - File System Access API
+      const dirHandle = await window.showDirectoryPicker();
+      const fileMap: FileMap = {};
 
-    const firstFile = files[0];
-    let name = `New ${type === 'images' ? 'Dataset' : 'Labels'} (${new Date().toLocaleTimeString()})`;
-    if (firstFile.webkitRelativePath) {
-      const parts = firstFile.webkitRelativePath.split('/');
-      if (parts.length > 1) name = parts[0];
+      // Iterate through directory (not recursive for now as per original logic)
+      // @ts-ignore
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && !entry.name.startsWith('.')) {
+          fileMap[entry.name] = entry;
+        }
+      }
+
+      const count = Object.keys(fileMap).length;
+      if (count === 0) return;
+
+      let name = dirHandle.name || `New ${type === 'images' ? 'Dataset' : 'Labels'}`;
+
+      let labelMap: LabelMap | undefined = undefined;
+      // Pre-load labels if type is labels
+      if (type === 'labels') {
+        labelMap = await preloadLabels(fileMap);
+      }
+
+      const newCollection: FileCollection = {
+        id: generateId(),
+        name,
+        type,
+        files: fileMap,
+        labels: labelMap,
+        count
+      };
+
+      setCollections(prev => [...prev, newCollection]);
+
+      if (type === 'images' && !activeProject.imageCollectionId) updateProject({ imageCollectionId: newCollection.id });
+      else if (type === 'labels' && !activeProject.gtCollectionId) updateProject({ gtCollectionId: newCollection.id });
+    } catch (err) {
+      console.error("Failed to import collection", err);
     }
-
-    const newCollection: FileCollection = {
-      id: generateId(),
-      name,
-      type,
-      files: fileMap,
-      count
-    };
-
-    setCollections(prev => [...prev, newCollection]);
-
-    if (type === 'images' && !activeProject.imageCollectionId) updateProject({ imageCollectionId: newCollection.id });
-    else if (type === 'labels' && !activeProject.gtCollectionId) updateProject({ gtCollectionId: newCollection.id });
   };
 
   const handleDeleteCollection = (id: string) => {
     setCollections(prev => prev.filter(c => c.id !== id));
     setProjects(ps => ps.map(p => ({
-        ...p,
-        imageCollectionId: p.imageCollectionId === id ? null : p.imageCollectionId,
-        gtCollectionId: p.gtCollectionId === id ? null : p.gtCollectionId,
+      ...p,
+      imageCollectionId: p.imageCollectionId === id ? null : p.imageCollectionId,
+      gtCollectionId: p.gtCollectionId === id ? null : p.gtCollectionId,
     })));
   };
 
   const handleBindData = (type: 'image' | 'gt', collectionId: string | null) => {
-      if (type === 'image') {
-          updateProject({ imageCollectionId: collectionId });
-          setCurrentPage(0);
-      }
-      else if (type === 'gt') updateProject({ gtCollectionId: collectionId });
+    if (type === 'image') {
+      updateProject({ imageCollectionId: collectionId });
+      setCurrentPage(0);
+    }
+    else if (type === 'gt') updateProject({ gtCollectionId: collectionId });
   };
 
-  const handleLoadPred = (files: FileList) => {
-     updateProject({ predFiles: processFiles(files) });
+  const handleLoadPred = async () => {
+    try {
+      // @ts-ignore
+      const dirHandle = await window.showDirectoryPicker();
+      const fileMap: FileMap = {};
+      // @ts-ignore
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && !entry.name.startsWith('.')) {
+          fileMap[entry.name] = entry;
+        }
+      }
+      const labelMap = await preloadLabels(fileMap);
+      updateProject({ predLabels: labelMap });
+    } catch (err) {
+      console.error("Failed to load predictions", err);
+    }
   };
 
   const handleProjectCreate = (name: string) => {
@@ -161,11 +184,11 @@ const App: React.FC = () => {
       return {
         name: imgName,
         file: imageFiles[imgName],
-        gtFile: gtFiles[txtName],
-        predFile: predFiles[txtName],
+        gtData: gtLabels[txtName],
+        predData: predLabels[txtName],
       };
     });
-  }, [imageFiles, gtFiles, predFiles]);
+  }, [imageFiles, gtLabels, predLabels]);
 
   // Pagination Logic
   const totalPages = Math.ceil(items.length / config.gridSize);
@@ -181,52 +204,45 @@ const App: React.FC = () => {
 
   // Calculate Page Stats
   useEffect(() => {
-    let active = true;
-    const calcStats = async () => {
-      if (currentItems.length === 0) {
-        if (active) setPageStats({ tp: 0, fp: 0, fn: 0 });
-        return;
-      }
+    if (currentItems.length === 0) {
+      setPageStats({ tp: 0, fp: 0, fn: 0 });
+      return;
+    }
 
-      const totals = { tp: 0, fp: 0, fn: 0 };
-      
-      await Promise.all(currentItems.map(async (item) => {
-        const gtBoxes = item.gtFile ? await parseYoloFile(item.gtFile) : [];
-        const predBoxes = item.predFile ? await parseYoloFile(item.predFile) : [];
-        const result = calculateMatches(gtBoxes, predBoxes, config);
-        
-        result.forEach(b => {
-           if (b.type === BoxType.TP_PRED) totals.tp++;
-           else if (b.type === BoxType.FP) totals.fp++;
-           else if (b.type === BoxType.FN) totals.fn++;
-        });
-      }));
+    const totals = { tp: 0, fp: 0, fn: 0 };
+    currentItems.forEach((item) => {
+      const gtBoxes = item.gtData || [];
+      const predBoxes = item.predData || [];
+      const result = calculateMatches(gtBoxes, predBoxes, config);
 
-      if (active) setPageStats(totals);
-    };
+      result.forEach(b => {
+        if (b.type === BoxType.TP_PRED) totals.tp++;
+        else if (b.type === BoxType.FP) totals.fp++;
+        else if (b.type === BoxType.FN) totals.fn++;
+      });
+    });
 
-    calcStats();
-    return () => { active = false; };
+    setPageStats(totals);
   }, [currentItems, config.iopThreshold, config.confThreshold]);
 
 
   const nextPage = () => setCurrentPage(p => Math.min(p + 1, totalPages - 1));
   const prevPage = () => setCurrentPage(p => Math.max(p - 1, 0));
-  
+
   const randomPage = () => {
-      if (totalPages <= 1) return;
-      const rnd = Math.floor(Math.random() * totalPages);
-      setCurrentPage(rnd);
+    if (totalPages <= 1) return;
+    const rnd = Math.floor(Math.random() * totalPages);
+    setCurrentPage(rnd);
   };
 
   const handlePageJump = (e: React.FormEvent) => {
-      e.preventDefault();
-      const pageNum = parseInt(jumpPageInput, 10);
-      if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-          setCurrentPage(pageNum - 1);
-      } else {
-          setJumpPageInput((currentPage + 1).toString()); // Reset on invalid
-      }
+    e.preventDefault();
+    const pageNum = parseInt(jumpPageInput, 10);
+    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
+      setCurrentPage(pageNum - 1);
+    } else {
+      setJumpPageInput((currentPage + 1).toString()); // Reset on invalid
+    }
   };
 
   const handleDownloadPage = async () => {
@@ -236,14 +252,15 @@ const App: React.FC = () => {
     try {
       // 1. Load all images to determine dimensions
       const loadedData = await Promise.all(currentItems.map(async (item) => {
-         const url = URL.createObjectURL(item.file);
-         const img = new Image();
-         img.src = url;
-         await new Promise((resolve) => {
-             img.onload = resolve;
-             img.onerror = resolve; // Handle error gracefully
-         });
-         return { item, img, url };
+        const file = item.file;
+        const url = file instanceof File ? URL.createObjectURL(file) : URL.createObjectURL(await (file as FileSystemFileHandle).getFile());
+        const img = new Image();
+        img.src = url;
+        await new Promise((resolve) => {
+          img.onload = resolve;
+          img.onerror = resolve; // Handle error gracefully
+        });
+        return { item, img, url };
       }));
 
       // 2. Configure Layout (Stitched High-Res)
@@ -254,12 +271,12 @@ const App: React.FC = () => {
       // 3. Organize Grid Rows
       const rows: typeof loadedData[] = [];
       let currentRow: typeof loadedData = [];
-      
+
       for (const data of loadedData) {
         currentRow.push(data);
         if (currentRow.length === cols) {
-            rows.push(currentRow);
-            currentRow = [];
+          rows.push(currentRow);
+          currentRow = [];
         }
       }
       if (currentRow.length > 0) rows.push(currentRow);
@@ -267,21 +284,21 @@ const App: React.FC = () => {
       // 4. Calculate Dimensions (Adaptive Height)
       let totalHeight = 0;
       const rowConfigs = rows.map(row => {
-          // Calculate height for each item based on target width to maintain aspect ratio
-          const processedItems = row.map(data => {
-             const aspect = data.img.naturalWidth ? (data.img.naturalWidth / data.img.naturalHeight) : 1.77;
-             const height = Math.round(targetCellWidth / aspect);
-             return { ...data, width: targetCellWidth, height };
-          });
-          // Row height is determined by the tallest item in the row (to align grid)
-          const rowHeight = Math.max(...processedItems.map(i => i.height));
-          const y = totalHeight;
-          totalHeight += rowHeight + gap;
-          return { items: processedItems, rowHeight, y };
+        // Calculate height for each item based on target width to maintain aspect ratio
+        const processedItems = row.map(data => {
+          const aspect = data.img.naturalWidth ? (data.img.naturalWidth / data.img.naturalHeight) : 1.77;
+          const height = Math.round(targetCellWidth / aspect);
+          return { ...data, width: targetCellWidth, height };
+        });
+        // Row height is determined by the tallest item in the row (to align grid)
+        const rowHeight = Math.max(...processedItems.map(i => i.height));
+        const y = totalHeight;
+        totalHeight += rowHeight + gap;
+        return { items: processedItems, rowHeight, y };
       });
       // Remove last gap
       if (rowConfigs.length > 0) totalHeight -= gap;
-      
+
       const totalWidth = (cols * targetCellWidth) + ((cols - 1) * gap);
 
       // 5. Create Canvas
@@ -292,32 +309,32 @@ const App: React.FC = () => {
       if (!ctx) throw new Error('Could not create canvas context');
 
       // Fill Background (Dark Border)
-      ctx.fillStyle = '#0f172a'; 
+      ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       // 6. Draw Items
       for (const rowConfig of rowConfigs) {
-         for (let i = 0; i < rowConfig.items.length; i++) {
-             const { item, img, width, height } = rowConfig.items[i];
-             const x = i * (targetCellWidth + gap);
-             // Center vertically in the row strip
-             const y = rowConfig.y + (rowConfig.rowHeight - height) / 2;
+        for (let i = 0; i < rowConfig.items.length; i++) {
+          const { item, img, width, height } = rowConfig.items[i];
+          const x = i * (targetCellWidth + gap);
+          // Center vertically in the row strip
+          const y = rowConfig.y + (rowConfig.rowHeight - height) / 2;
 
-             ctx.save();
-             ctx.translate(x, y);
-             ctx.beginPath();
-             ctx.rect(0, 0, width, height);
-             ctx.clip(); // Clip to exact image area
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.beginPath();
+          ctx.rect(0, 0, width, height);
+          ctx.clip(); // Clip to exact image area
 
-             const scaleFactor = width / (img.naturalWidth || width);
+          const scaleFactor = width / (img.naturalWidth || width);
 
-             await drawVisualization(ctx, item, config, width, height, img, {
-                 fontSize: Math.round(config.labelFontSize * scaleFactor),
-                 forceLineWidth: Math.max(1, Math.round(config.lineWidth * scaleFactor))
-             });
-             
-             ctx.restore();
-         }
+          await drawVisualization(ctx, item, config, width, height, img, {
+            fontSize: Math.round(config.labelFontSize * scaleFactor),
+            forceLineWidth: Math.max(1, Math.round(config.lineWidth * scaleFactor))
+          });
+
+          ctx.restore();
+        }
       }
 
       // 7. Download
@@ -337,34 +354,34 @@ const App: React.FC = () => {
     }
   };
 
-  const gridClass = config.gridSize === 9 
-    ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" 
+  const gridClass = config.gridSize === 9
+    ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
     : "grid-cols-2 md:grid-cols-3 xl:grid-cols-4";
-  
+
   // Resize Handler
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-        if (!isDragging.current) return;
-        const newWidth = document.body.clientWidth - e.clientX;
-        setSidebarWidth(Math.max(300, Math.min(newWidth, 800)));
+      if (!isDragging.current) return;
+      const newWidth = document.body.clientWidth - e.clientX;
+      setSidebarWidth(Math.max(300, Math.min(newWidth, 800)));
     };
 
     const handleMouseUp = () => {
-        isDragging.current = false;
-        document.body.style.cursor = 'default';
+      isDragging.current = false;
+      document.body.style.cursor = 'default';
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      <ControlPanel 
+      <ControlPanel
         projects={projects}
         activeProjectId={activeProjectId}
         collections={collections}
@@ -380,181 +397,189 @@ const App: React.FC = () => {
         onConfigChange={setConfig}
         stats={{
           totalImages: items.length,
-          hasGt: Object.keys(gtFiles).length > 0,
-          hasPred: Object.keys(predFiles).length > 0,
+          hasGt: Object.keys(gtLabels).length > 0,
+          hasPred: Object.keys(predLabels).length > 0,
         }}
       />
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Header - Sticky */}
         <div className="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-surface shadow-sm z-10 flex-shrink-0">
-            {/* Left: Info & Page Jump */}
-            <div className="text-slate-300 text-sm flex items-center gap-4 flex-1 min-w-0">
-              <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700 flex-shrink-0">
-                Project: <span className="text-white font-medium">{activeProject.name}</span>
-              </div>
-              {config.viewMode === 'grid' && (
-                <form onSubmit={handlePageJump} className="flex items-center gap-2 text-slate-400 flex-shrink-0">
-                    <span>Page</span>
-                    <input 
-                      type="number" 
-                      value={jumpPageInput}
-                      onChange={(e) => setJumpPageInput(e.target.value)}
-                      onBlur={() => handlePageJump({ preventDefault: () => {} } as any)}
-                      className="w-16 bg-slate-800 border border-slate-700 rounded text-center text-white focus:outline-none focus:border-primary text-sm py-1"
-                    />
-                    <span>of <span className="text-white font-bold">{totalPages || 1}</span></span>
-                </form>
-              )}
+          {/* Left: Info & Page Jump */}
+          <div className="text-slate-300 text-sm flex items-center gap-4 flex-1 min-w-0">
+            <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700 flex-shrink-0">
+              Project: <span className="text-white font-medium">{activeProject.name}</span>
             </div>
-            
-            {/* Center: Global Stats & Zoom */}
-            <div className="flex items-center justify-center gap-6 flex-shrink-0 mx-4">
-              {config.viewMode === 'grid' && items.length > 0 && (
-                 <>
-                   {/* Global Stats with Highlight */}
-                   <div className="flex items-center gap-4 bg-slate-800/80 px-5 py-2 rounded-full border border-slate-700 shadow-sm">
-                      <div 
-                        onMouseEnter={() => setGlobalHighlight(BoxType.TP_PRED)}
-                        onMouseLeave={() => setGlobalHighlight(null)}
-                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
-                        style={{ color: config.styles.tpPred.color }}
-                      >
-                          <span className="font-bold mr-1">TP:</span>{pageStats.tp}
-                      </div>
-                      <div className="w-px h-4 bg-slate-600"></div>
-                      <div 
-                        onMouseEnter={() => setGlobalHighlight(BoxType.FN)}
-                        onMouseLeave={() => setGlobalHighlight(null)}
-                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
-                        style={{ color: config.styles.fn.color }}
-                      >
-                          <span className="font-bold mr-1">FN:</span>{pageStats.fn}
-                      </div>
-                      <div className="w-px h-4 bg-slate-600"></div>
-                      <div 
-                        onMouseEnter={() => setGlobalHighlight(BoxType.FP)}
-                        onMouseLeave={() => setGlobalHighlight(null)}
-                        className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
-                        style={{ color: config.styles.fp.color }}
-                      >
-                          <span className="font-bold mr-1">FP:</span>{pageStats.fp}
-                      </div>
-                   </div>
+            {config.viewMode === 'grid' && (
+              <form onSubmit={handlePageJump} className="flex items-center gap-2 text-slate-400 flex-shrink-0">
+                <span>Page</span>
+                <input
+                  type="number"
+                  value={jumpPageInput}
+                  onChange={(e) => setJumpPageInput(e.target.value)}
+                  onBlur={() => handlePageJump({ preventDefault: () => { } } as any)}
+                  className="w-16 bg-slate-800 border border-slate-700 rounded text-center text-white focus:outline-none focus:border-primary text-sm py-1"
+                />
+                <span>of <span className="text-white font-bold">{totalPages || 1}</span></span>
+              </form>
+            )}
+          </div>
 
-                   {/* Zoom */}
-                   <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-2 rounded-full border border-slate-700">
-                     <button onClick={() => setConfig({...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomOut className="w-3.5 h-3.5" /></button>
-                     <input 
-                       type="range" 
-                       min="0.5" max="3" step="0.1" 
-                       value={config.zoomLevel} 
-                       onChange={(e) => setConfig({...config, zoomLevel: parseFloat(e.target.value)})}
-                       className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                     />
-                     <button onClick={() => setConfig({...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1)})} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
-                   </div>
-                 </>
-              )}
-            </div>
-            
-            {/* Right: Actions */}
-            <div className="flex justify-end gap-4 flex-1 min-w-0">
-              {config.viewMode === 'grid' && (
-                  <>
-                    {items.length > 0 && (
-                        <button
-                        onClick={handleDownloadPage}
-                        disabled={isDownloading}
-                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20 whitespace-nowrap"
-                        >
-                        {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                        Download Page
-                        </button>
-                    )}
+          {/* Center: Global Stats & Zoom */}
+          <div className="flex items-center justify-center gap-6 flex-shrink-0 mx-4">
+            {config.viewMode === 'grid' && items.length > 0 && (
+              <>
+                {/* Global Stats with Highlight */}
+                <div className="flex items-center gap-4 bg-slate-800/80 px-5 py-2 rounded-full border border-slate-700 shadow-sm">
+                  <div
+                    onMouseEnter={() => setGlobalHighlight(BoxType.TP_PRED)}
+                    onMouseLeave={() => setGlobalHighlight(null)}
+                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    style={{ color: config.styles.tpPred.color }}
+                  >
+                    <span className="font-bold mr-1">TP:</span>{pageStats.tp}
+                  </div>
+                  <div className="w-px h-4 bg-slate-600"></div>
+                  <div
+                    onMouseEnter={() => setGlobalHighlight(BoxType.FN)}
+                    onMouseLeave={() => setGlobalHighlight(null)}
+                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    style={{ color: config.styles.fn.color }}
+                  >
+                    <span className="font-bold mr-1">FN:</span>{pageStats.fn}
+                  </div>
+                  <div className="w-px h-4 bg-slate-600"></div>
+                  <div
+                    onMouseEnter={() => setGlobalHighlight(BoxType.FP)}
+                    onMouseLeave={() => setGlobalHighlight(null)}
+                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    style={{ color: config.styles.fp.color }}
+                  >
+                    <span className="font-bold mr-1">FP:</span>{pageStats.fp}
+                  </div>
+                </div>
 
-                    <div className="flex gap-2">
-                        <button 
-                        onClick={prevPage} 
-                        disabled={currentPage === 0}
-                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
-                        title="Previous Page"
-                        >
-                        <ChevronLeft className="w-5 h-5" />
-                        </button>
-                        
-                        <button
-                        onClick={randomPage}
-                        disabled={totalPages <= 1}
-                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
-                        title="Random Page"
-                        >
-                        <Shuffle className="w-5 h-5" />
-                        </button>
+                {/* Zoom */}
+                <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-2 rounded-full border border-slate-700">
+                  <button onClick={() => setConfig({ ...config, zoomLevel: Math.max(0.5, config.zoomLevel - 0.1) })} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomOut className="w-3.5 h-3.5" /></button>
+                  <input
+                    type="range"
+                    min="0.5" max="3" step="0.1"
+                    value={config.zoomLevel}
+                    onChange={(e) => setConfig({ ...config, zoomLevel: parseFloat(e.target.value) })}
+                    className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                  />
+                  <button onClick={() => setConfig({ ...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1) })} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
+                </div>
+              </>
+            )}
+          </div>
 
-                        <button 
-                        onClick={nextPage} 
-                        disabled={currentPage >= totalPages - 1}
-                        className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
-                        title="Next Page"
-                        >
-                        <ChevronRight className="w-5 h-5" />
-                        </button>
-                    </div>
-                  </>
-              )}
-            </div>
+          {/* Right: Actions */}
+          <div className="flex justify-end gap-4 flex-1 min-w-0">
+            {config.viewMode === 'grid' && (
+              <>
+                {items.length > 0 && (
+                  <button
+                    onClick={handleDownloadPage}
+                    disabled={isDownloading}
+                    className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 text-sm disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20 whitespace-nowrap"
+                  >
+                    {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    Download Page
+                  </button>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={prevPage}
+                    disabled={currentPage === 0}
+                    className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                    title="Previous Page"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    onClick={randomPage}
+                    disabled={totalPages <= 1}
+                    className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                    title="Random Page"
+                  >
+                    <Shuffle className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className={`p-2 rounded transition-colors ${isSidebarOpen ? 'bg-primary/20 text-primary' : 'hover:bg-slate-700 text-slate-200'}`}
+                    title={isSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+                  >
+                    <PanelRight className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    onClick={nextPage}
+                    disabled={currentPage >= totalPages - 1}
+                    className="p-2 rounded hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-200"
+                    title="Next Page"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Main Content Split View */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left / Main: Grid or Full PR Graph */}
           <div className="flex-1 overflow-hidden relative flex flex-col">
-              {config.viewMode === 'pr-curve' ? (
-                <PRGraph items={items} config={config} />
-              ) : (
-                <div className="w-full h-full overflow-auto custom-scrollbar p-6">
-                  {items.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-500">
-                      <Inbox className="w-12 h-12 mb-4 opacity-50" />
-                      <p>No Images Selected</p>
-                    </div>
-                  ) : (
-                    <div 
-                      className={`grid ${gridClass} gap-4 pb-10 origin-top-left transition-all duration-200 ease-out`}
-                      style={{ width: `${config.zoomLevel * 100}%` }}
-                    >
-                      {currentItems.map((item) => (
-                        <ImageViewer 
-                          key={item.name} 
-                          item={item} 
-                          config={config}
-                          externalHighlight={globalHighlight}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+            {config.viewMode === 'pr-curve' ? (
+              <PRGraph items={items} config={config} />
+            ) : (
+              <div className="w-full h-full overflow-auto custom-scrollbar p-6">
+                {items.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500">
+                    <Inbox className="w-12 h-12 mb-4 opacity-50" />
+                    <p>No Images Selected</p>
+                  </div>
+                ) : (
+                  <div
+                    className={`grid ${gridClass} gap-4 pb-10 origin-top-left transition-all duration-200 ease-out`}
+                    style={{ width: `${config.zoomLevel * 100}%` }}
+                  >
+                    {currentItems.map((item) => (
+                      <ImageViewer
+                        key={item.name}
+                        item={item}
+                        config={config}
+                        externalHighlight={globalHighlight}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right Sidebar: PR Graph (Visible in Grid Mode) */}
-          {config.viewMode === 'grid' && (
+          {config.viewMode === 'grid' && isSidebarOpen && (
             <>
-                <div 
-                    className="w-1 bg-slate-800 hover:bg-primary cursor-col-resize z-20 flex-shrink-0 transition-colors border-l border-slate-700"
-                    onMouseDown={(e) => {
-                        isDragging.current = true;
-                        document.body.style.cursor = 'col-resize';
-                        e.preventDefault();
-                    }}
-                />
-                <div 
-                    style={{ width: sidebarWidth }} 
-                    className="flex-shrink-0 bg-surface/30 border-l border-slate-700 overflow-hidden shadow-xl z-10 flex flex-col"
-                >
-                    <PRGraph items={items} config={config} />
-                </div>
+              <div
+                className="w-1 bg-slate-800 hover:bg-primary cursor-col-resize z-20 flex-shrink-0 transition-colors border-l border-slate-700"
+                onMouseDown={(e) => {
+                  isDragging.current = true;
+                  document.body.style.cursor = 'col-resize';
+                  e.preventDefault();
+                }}
+              />
+              <div
+                style={{ width: sidebarWidth }}
+                className="flex-shrink-0 bg-surface/30 border-l border-slate-700 overflow-hidden shadow-xl z-10 flex flex-col"
+              >
+                <PRGraph items={items} config={config} />
+              </div>
             </>
           )}
         </div>

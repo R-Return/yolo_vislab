@@ -55,6 +55,7 @@ const App: React.FC = () => {
   const [sidebarWidth, setSidebarWidth] = useState(250);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const isDragging = useRef(false);
+  const prevGridSizeRef = useRef(DEFAULT_CONFIG.gridSize);
 
   // Active Project Accessors
   const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
@@ -201,6 +202,26 @@ const App: React.FC = () => {
   useEffect(() => {
     setJumpPageInput((currentPage + 1).toString());
   }, [currentPage]);
+
+  // Handle Grid Size Change - Recalculate Page to maintain visual continuity
+  useEffect(() => {
+    const prevGridSize = prevGridSizeRef.current;
+    if (prevGridSize !== config.gridSize) {
+      const firstItemIndex = currentPage * prevGridSize;
+      const newPage = Math.floor(firstItemIndex / config.gridSize);
+      setCurrentPage(newPage);
+      prevGridSizeRef.current = config.gridSize;
+    }
+  }, [config.gridSize]);
+
+  // Ensure currentPage is always within valid bounds
+  useEffect(() => {
+    if (totalPages > 0 && currentPage >= totalPages) {
+      setCurrentPage(totalPages - 1);
+    } else if (totalPages === 0 && currentPage !== 0) {
+      setCurrentPage(0);
+    }
+  }, [totalPages, currentPage]);
 
   // Calculate Page Stats
   useEffect(() => {

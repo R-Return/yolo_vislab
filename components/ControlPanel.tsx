@@ -261,9 +261,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="space-y-3 pt-2">
           <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Analysis</p>
           <div>
-            <div className="flex justify-between mb-1"><label className="text-slate-300">IoP Threshold</label><span className="text-xs text-primary">{config.iopThreshold.toFixed(2)}</span></div>
-            <input type="range" min="0.1" max="1.0" step="0.05" value={config.iopThreshold} onChange={(e) => onConfigChange({ ...config, iopThreshold: parseFloat(e.target.value) })} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
-            <p className="text-[10px] text-slate-500 mt-1">Intersection over Prediction Area</p>
+            <div className="flex justify-between mb-1"><label className="text-slate-300">IoMin Threshold</label><span className="text-xs text-primary">{config.ioMinThreshold.toFixed(2)}</span></div>
+            <input type="range" min="0.1" max="1.0" step="0.05" value={config.ioMinThreshold} onChange={(e) => onConfigChange({ ...config, ioMinThreshold: parseFloat(e.target.value) })} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
+            <p className="text-[10px] text-slate-500 mt-1">Intersection over Minimum Area</p>
           </div>
           <div>
             <div className="flex justify-between mb-1"><label className="text-slate-300">Conf Threshold</label><span className="text-xs text-primary">{config.confThreshold.toFixed(2)}</span></div>

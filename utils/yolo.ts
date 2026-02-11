@@ -45,11 +45,11 @@ export const preloadLabels = async (fileMap: { [name: string]: File | FileSystem
 };
 
 /**
- * Calculates Intersection over Prediction (IoP).
- * IoP = Area(Intersection) / Area(Prediction Box).
- * This allows large predictions that contain small GTs (fragmentation) to be matched.
+ * Calculates Intersection over Minimum Area (IoMin).
+ * IoMin = Area(Intersection) / min(Area(Pred), Area(GT)).
+ * This helps handle big predictions and small GTs, and vice versa.
  */
-const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
+const calculateIoMin = (pred: BoundingBox, gt: BoundingBox): number => {
   const b1_x1 = pred.x - pred.w / 2;
   const b1_y1 = pred.y - pred.h / 2;
   const b1_x2 = pred.x + pred.w / 2;
@@ -69,17 +69,19 @@ const calculateIoP = (pred: BoundingBox, gt: BoundingBox): number => {
 
   const intersectionArea = (x2 - x1) * (y2 - y1);
 
-  // CHANGE: Denominator is strictly the Prediction Area
   const predArea = pred.w * pred.h;
+  const gtArea = gt.w * gt.h;
 
-  if (predArea === 0) return 0;
-  return intersectionArea / predArea;
+  const minArea = Math.min(predArea, gtArea);
+
+  if (minArea === 0) return 0;
+  return intersectionArea / minArea;
 };
 
 /**
  * Processes GT and Pred boxes for Visualization (Drawing).
  * * Logic for Visualization:
- * - If a Prediction matches *any* GT (IoP >= Threshold), it is visualized as TP (Green).
+ * - If a Prediction matches *any* GT (IoMin >= Threshold), it is visualized as TP (Green).
  * (Even if it is a duplicate detection, we visually show it as correct).
  * - If a Prediction matches NO GT, it is FP (Red).
  * - If a GT is matched by at least one Pred, it is TP_GT (Green).
@@ -104,10 +106,10 @@ export const calculateMatches = (
     gtBoxes.forEach((gt, gtIdx) => {
       if (gt.classId !== pred.classId) return;
 
-      const iop = calculateIoP(pred, gt);
+      const ioMin = calculateIoMin(pred, gt);
 
       // Visualization Logic: Any match counts as a "Correct Prediction" visually
-      if (iop >= config.iopThreshold) {
+      if (ioMin >= config.ioMinThreshold) {
         isTp = true;
         matchedGtIndices.add(gtIdx);
       }
@@ -168,7 +170,7 @@ export interface PRPoint {
  * 1. Collect all predictions and GTs.
  * 2. Evaluate at multiple confidence thresholds.
  * 3. Logic:
- * - IoP Metric: Intersection / PredArea.
+ * - IoMin Metric: Intersection / min(Area(Pred), Area(GT)).
  * - GT Scanning: A GT counts as 1 TP.
  * - Fragmentation: Multiple preds matching one GT -> 1st is TP, others are IGNORED (Duplicate).
  * - GT Reuse: One pred matching multiple GTs -> Can count as TP for both if they are new.
@@ -176,7 +178,7 @@ export interface PRPoint {
  */
 export const calculatePRStats = async (
   items: ImageItem[],
-  iopThreshold: number
+  ioMinThreshold: number
 ): Promise<PRPoint[]> => {
   // 1. Gather all GTs and Preds from all items
   const dataset = items.map((item, imgIdx) => {
@@ -234,9 +236,9 @@ export const calculatePRStats = async (
       gtsInImage.forEach((gt, gtIdx) => {
         if (gt.classId !== pred.classId) return;
 
-        const iop = calculateIoP(pred, gt);
+        const ioMin = calculateIoMin(pred, gt);
 
-        if (iop >= iopThreshold) {
+        if (ioMin >= ioMinThreshold) {
           matchedAnyGt = true;
           // Check if this GT was already found by a higher confidence pred
           if (!detectedSet.has(gtIdx)) {

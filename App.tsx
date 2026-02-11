@@ -8,7 +8,7 @@ import { drawVisualization } from './utils/render';
 import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
 
 const DEFAULT_CONFIG: VisualizationConfig = {
-  iopThreshold: 0.5,
+  ioMinThreshold: 0.5,
   confThreshold: 0.25,
   styles: {
     tpPred: { color: '#4ade80', dashed: false }, // Green, Solid
@@ -244,7 +244,7 @@ const App: React.FC = () => {
     });
 
     setPageStats(totals);
-  }, [currentItems, config.iopThreshold, config.confThreshold]);
+  }, [currentItems, config.ioMinThreshold, config.confThreshold]);
 
 
   const nextPage = () => setCurrentPage(p => Math.min(p + 1, totalPages - 1));

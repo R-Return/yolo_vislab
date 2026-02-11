@@ -29,7 +29,7 @@ export type ViewMode = 'grid' | 'pr-curve';
 export type AspectRatio = '16:9' | '4:3' | '1:1' | 'auto';
 
 export interface VisualizationConfig {
-  iopThreshold: number; // Changed from iouThreshold
+  ioMinThreshold: number; // Changed from iopThreshold
   confThreshold: number;
   styles: {
     tpPred: BoxStyle;

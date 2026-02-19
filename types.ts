@@ -43,6 +43,13 @@ export interface VisualizationConfig {
   aspectRatio: AspectRatio;
   zoomLevel: number;
   viewMode: ViewMode;
+  editHighlightColor?: string;
+  audio?: {
+    minFreq: number;
+    maxFreq: number;
+    highlightColor?: string;
+  };
+  showPredInEditMode?: boolean;
 }
 
 export interface FileMap {
@@ -78,6 +85,10 @@ export interface Project {
   gtCollectionId: string | null;
   // Project-Specific Data
   predLabels: LabelMap; // Pre-loaded
+  imagePath?: string;
+  gtPath?: string;
+  predPath?: string;
+  audioPath?: string;
 }
 
 export interface HitRegion {

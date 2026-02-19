@@ -2,10 +2,15 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ImageViewer from './components/ImageViewer';
 import PRGraph from './components/PRGraph';
-import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap } from './types';
+import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap, BoundingBox } from './types';
 import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle, PanelRight } from 'lucide-react';
 import { drawVisualization } from './utils/render';
 import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
+import { exportLabels } from './utils/export';
+import { AudioPlayer, getAudioFilename, extractStartTimeFromFilename } from './utils/audio';
+
+// Single Audio Player Instance
+const audioPlayer = new AudioPlayer();
 
 const DEFAULT_CONFIG: VisualizationConfig = {
   ioMinThreshold: 0.5,
@@ -21,7 +26,14 @@ const DEFAULT_CONFIG: VisualizationConfig = {
   gridSize: 9,
   aspectRatio: '1:1', // Default to Square to avoid black bars on mixed content
   zoomLevel: 1.0,
-  viewMode: 'grid'
+  viewMode: 'grid',
+  audio: {
+    minFreq: 500,
+    maxFreq: 12000,
+    highlightColor: '#4ade80' // Match TP Pred by default
+  },
+  editHighlightColor: '#fbbf24', // Amber/Yellow default
+  showPredInEditMode: false
 };
 
 const generateId = () => {
@@ -43,10 +55,17 @@ const App: React.FC = () => {
   const [collections, setCollections] = useState<FileCollection[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
+
+  // Audio State
+  const [audioFileMap, setAudioFileMap] = useState<FileMap>({});
 
   // Page Stats & Highlight State
   const [pageStats, setPageStats] = useState({ tp: 0, fp: 0, fn: 0 });
   const [globalHighlight, setGlobalHighlight] = useState<BoxType | null>(null);
+  const [lockedHighlight, setLockedHighlight] = useState<BoxType | null>(null);
 
   // Jump Page State
   const [jumpPageInput, setJumpPageInput] = useState("1");
@@ -77,17 +96,16 @@ const App: React.FC = () => {
     setProjects(ps => ps.map(p => p.id === activeProjectId ? { ...p, ...updates } : p));
   };
 
+
   const setConfig = (newConfig: VisualizationConfig) => updateProject({ config: newConfig });
 
 
-  // Collection Management
-  const handleImportCollection = async (type: 'images' | 'labels') => {
+  // Direct Data Loading
+  const handleLoadImages = async () => {
     try {
-      // @ts-ignore - File System Access API
+      // @ts-ignore
       const dirHandle = await window.showDirectoryPicker();
       const fileMap: FileMap = {};
-
-      // Iterate through directory (not recursive for now as per original logic)
       // @ts-ignore
       for await (const entry of dirHandle.values()) {
         if (entry.kind === 'file' && !entry.name.startsWith('.')) {
@@ -95,50 +113,35 @@ const App: React.FC = () => {
         }
       }
 
-      const count = Object.keys(fileMap).length;
-      if (count === 0) return;
-
-      let name = dirHandle.name || `New ${type === 'images' ? 'Dataset' : 'Labels'}`;
-
-      let labelMap: LabelMap | undefined = undefined;
-      // Pre-load labels if type is labels
-      if (type === 'labels') {
-        labelMap = await preloadLabels(fileMap);
-      }
-
-      const newCollection: FileCollection = {
-        id: generateId(),
-        name,
-        type,
-        files: fileMap,
-        labels: labelMap,
-        count
-      };
-
-      setCollections(prev => [...prev, newCollection]);
-
-      if (type === 'images' && !activeProject.imageCollectionId) updateProject({ imageCollectionId: newCollection.id });
-      else if (type === 'labels' && !activeProject.gtCollectionId) updateProject({ gtCollectionId: newCollection.id });
-    } catch (err) {
-      console.error("Failed to import collection", err);
-    }
-  };
-
-  const handleDeleteCollection = (id: string) => {
-    setCollections(prev => prev.filter(c => c.id !== id));
-    setProjects(ps => ps.map(p => ({
-      ...p,
-      imageCollectionId: p.imageCollectionId === id ? null : p.imageCollectionId,
-      gtCollectionId: p.gtCollectionId === id ? null : p.gtCollectionId,
-    })));
-  };
-
-  const handleBindData = (type: 'image' | 'gt', collectionId: string | null) => {
-    if (type === 'image') {
-      updateProject({ imageCollectionId: collectionId });
+      // Simplified: We use a special collection or just bind to project
+      const collId = generateId();
+      setCollections(prev => [...prev, { id: collId, name: dirHandle.name, type: 'images', files: fileMap, count: Object.keys(fileMap).length }]);
+      updateProject({ imageCollectionId: collId, imagePath: dirHandle.name });
       setCurrentPage(0);
+    } catch (err) {
+      console.error("Failed to load images", err);
     }
-    else if (type === 'gt') updateProject({ gtCollectionId: collectionId });
+  };
+
+  const handleLoadGT = async () => {
+    try {
+      // @ts-ignore
+      const dirHandle = await window.showDirectoryPicker();
+      const fileMap: FileMap = {};
+      // @ts-ignore
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && !entry.name.startsWith('.')) {
+          fileMap[entry.name] = entry;
+        }
+      }
+      const labelMap = await preloadLabels(fileMap);
+
+      const collId = generateId();
+      setCollections(prev => [...prev, { id: collId, name: dirHandle.name, type: 'labels', files: fileMap, labels: labelMap, count: Object.keys(fileMap).length }]);
+      updateProject({ gtCollectionId: collId, gtPath: dirHandle.name });
+    } catch (err) {
+      console.error("Failed to load GT", err);
+    }
   };
 
   const handleLoadPred = async () => {
@@ -153,9 +156,78 @@ const App: React.FC = () => {
         }
       }
       const labelMap = await preloadLabels(fileMap);
-      updateProject({ predLabels: labelMap });
+      updateProject({ predLabels: labelMap, predPath: dirHandle.name });
     } catch (err) {
       console.error("Failed to load predictions", err);
+    }
+  };
+
+  const handleUpdateLabels = (fileName: string, newBoxes: BoundingBox[]) => {
+    if (!activeProject.gtCollectionId) return;
+
+    const baseName = fileName.substring(0, fileName.lastIndexOf('.'));
+    const txtName = `${baseName}.txt`;
+    setModifiedFiles(prev => new Set(prev).add(txtName));
+
+    // Update the relevant collection in state
+    setCollections(prev => prev.map(c => {
+      if (c.id === activeProject.gtCollectionId) {
+        return {
+          ...c,
+          labels: {
+            ...c.labels,
+            [txtName]: newBoxes
+          }
+        };
+      }
+      return c;
+    }));
+  };
+
+  const handleExportLabels = async () => {
+    if (!activeProject.gtCollectionId || modifiedFiles.size === 0) {
+      alert("No modifications to export.");
+      return;
+    }
+    const collection = collections.find(c => c.id === activeProject.gtCollectionId);
+    if (!collection || !collection.labels) return;
+
+    setIsExporting(true);
+    try {
+      // Filter labels to only include modified ones
+      const filteredLabels: LabelMap = {};
+      modifiedFiles.forEach(name => {
+        if (collection.labels![name]) {
+          filteredLabels[name] = collection.labels![name];
+        }
+      });
+
+      await exportLabels(filteredLabels, `${collection.name}_modified.zip`);
+    } catch (err) {
+      console.error("Export failed", err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleLoadAudio = async () => {
+    try {
+      // @ts-ignore
+      const dirHandle = await window.showDirectoryPicker();
+      const fileMap: FileMap = {};
+      // @ts-ignore
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file' && !entry.name.startsWith('.')) {
+          const ext = entry.name.split('.').pop()?.toLowerCase();
+          if (['wav', 'mp3', 'ogg', 'm4a'].includes(ext || '')) {
+            fileMap[entry.name] = entry;
+          }
+        }
+      }
+      setAudioFileMap(fileMap);
+      updateProject({ audioPath: dirHandle.name });
+    } catch (err) {
+      console.error("Failed to load audio folder", err);
     }
   };
 
@@ -193,10 +265,10 @@ const App: React.FC = () => {
 
   // Pagination Logic
   const totalPages = Math.ceil(items.length / config.gridSize);
-  const currentItems = items.slice(
+  const currentItems = useMemo(() => items.slice(
     currentPage * config.gridSize,
     (currentPage + 1) * config.gridSize
-  );
+  ), [items, currentPage, config.gridSize]);
 
   // Sync jump input with current page
   useEffect(() => {
@@ -410,17 +482,26 @@ const App: React.FC = () => {
         onProjectCreate={handleProjectCreate}
         onProjectRename={handleProjectRename}
         onProjectDelete={handleProjectDelete}
-        onBindData={handleBindData}
+        onImportImages={handleLoadImages}
+        onImportGT={handleLoadGT}
         onLoadPred={handleLoadPred}
-        onImportCollection={handleImportCollection}
-        onDeleteCollection={handleDeleteCollection}
         config={config}
         onConfigChange={setConfig}
         stats={{
           totalImages: items.length,
           hasGt: Object.keys(gtLabels).length > 0,
           hasPred: Object.keys(predLabels).length > 0,
+          imagePath: activeProject.imagePath,
+          gtPath: activeProject.gtPath,
+          predPath: activeProject.predPath,
+          audioPath: activeProject.audioPath
         }}
+        isEditMode={isEditMode}
+        onToggleEditMode={setIsEditMode}
+        onExportLabels={handleExportLabels}
+        onLoadAudio={handleLoadAudio}
+        hasAudio={Object.keys(audioFileMap).length > 0}
+        isExporting={isExporting}
       />
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -450,27 +531,54 @@ const App: React.FC = () => {
                 {/* Global Stats with Highlight */}
                 <div className="flex items-center gap-4 bg-slate-800/80 px-5 py-2 rounded-full border border-slate-700 shadow-sm">
                   <div
-                    onMouseEnter={() => setGlobalHighlight(BoxType.TP_PRED)}
-                    onMouseLeave={() => setGlobalHighlight(null)}
-                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    onMouseEnter={() => !lockedHighlight && setGlobalHighlight(BoxType.TP_PRED)}
+                    onMouseLeave={() => !lockedHighlight && setGlobalHighlight(null)}
+                    onClick={() => {
+                      if (lockedHighlight === BoxType.TP_PRED) {
+                        setLockedHighlight(null);
+                        setGlobalHighlight(null);
+                      } else {
+                        setLockedHighlight(BoxType.TP_PRED);
+                        setGlobalHighlight(BoxType.TP_PRED);
+                      }
+                    }}
+                    className={`cursor-pointer px-3 py-0.5 rounded transition-all select-none ${lockedHighlight === BoxType.TP_PRED ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
                     style={{ color: config.styles.tpPred.color }}
                   >
                     <span className="font-bold mr-1">TP:</span>{pageStats.tp}
                   </div>
                   <div className="w-px h-4 bg-slate-600"></div>
                   <div
-                    onMouseEnter={() => setGlobalHighlight(BoxType.FN)}
-                    onMouseLeave={() => setGlobalHighlight(null)}
-                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    onMouseEnter={() => !lockedHighlight && setGlobalHighlight(BoxType.FN)}
+                    onMouseLeave={() => !lockedHighlight && setGlobalHighlight(null)}
+                    onClick={() => {
+                      if (lockedHighlight === BoxType.FN) {
+                        setLockedHighlight(null);
+                        setGlobalHighlight(null);
+                      } else {
+                        setLockedHighlight(BoxType.FN);
+                        setGlobalHighlight(BoxType.FN);
+                      }
+                    }}
+                    className={`cursor-pointer px-3 py-0.5 rounded transition-all select-none ${lockedHighlight === BoxType.FN ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
                     style={{ color: config.styles.fn.color }}
                   >
                     <span className="font-bold mr-1">FN:</span>{pageStats.fn}
                   </div>
                   <div className="w-px h-4 bg-slate-600"></div>
                   <div
-                    onMouseEnter={() => setGlobalHighlight(BoxType.FP)}
-                    onMouseLeave={() => setGlobalHighlight(null)}
-                    className="cursor-pointer px-3 py-0.5 rounded hover:bg-white/10 transition-colors"
+                    onMouseEnter={() => !lockedHighlight && setGlobalHighlight(BoxType.FP)}
+                    onMouseLeave={() => !lockedHighlight && setGlobalHighlight(null)}
+                    onClick={() => {
+                      if (lockedHighlight === BoxType.FP) {
+                        setLockedHighlight(null);
+                        setGlobalHighlight(null);
+                      } else {
+                        setLockedHighlight(BoxType.FP);
+                        setGlobalHighlight(BoxType.FP);
+                      }
+                    }}
+                    className={`cursor-pointer px-3 py-0.5 rounded transition-all select-none ${lockedHighlight === BoxType.FP ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
                     style={{ color: config.styles.fp.color }}
                   >
                     <span className="font-bold mr-1">FP:</span>{pageStats.fp}
@@ -573,6 +681,10 @@ const App: React.FC = () => {
                         item={item}
                         config={config}
                         externalHighlight={globalHighlight}
+                        isEditMode={isEditMode}
+                        onUpdateGt={handleUpdateLabels}
+                        audioPlayer={audioPlayer}
+                        audioFiles={audioFileMap}
                       />
                     ))}
                   </div>

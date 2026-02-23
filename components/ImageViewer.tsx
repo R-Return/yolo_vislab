@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
-import { Download, Loader2, Trash2 } from 'lucide-react';
+import { Download, Loader2, Trash2, Check } from 'lucide-react';
 import { ImageItem, VisualizationConfig, BoxType, RenderBox, HitRegion, BoundingBox } from '../types';
 import { drawVisualization } from '../utils/render';
 import { calculateMatches } from '../utils/yolo';
@@ -36,6 +36,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [playingBox, setPlayingBox] = useState<BoundingBox | null>(null);
   const [playhead, setPlayhead] = useState<number | null>(null); // 0 to 1 progress
+  const [tempAudioBox, setTempAudioBox] = useState<BoundingBox | null>(null);
+  const [contextPredBox, setContextPredBox] = useState<BoundingBox | null>(null);
 
   // Cache the processed data
   const [cachedData, setCachedData] = useState<{
@@ -55,11 +57,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     setLocalGtBoxes(item.gtData || []);
     setSelectedBoxIdx(null);
     setPlayingBox(null);
+    setTempAudioBox(null);
   }, [item, item.gtData]); // Only reset when item specifically changes
 
   // Close context menu
   useEffect(() => {
-    const closeMenu = () => setContextMenu(null);
+    const closeMenu = () => {
+      setContextMenu(null);
+      setContextPredBox(null);
+    };
     if (contextMenu) window.addEventListener('click', closeMenu);
     return () => window.removeEventListener('click', closeMenu);
   }, [contextMenu]);
@@ -126,6 +132,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         if (playingBox) {
           drawPlayingHighlight(ctx, playingBox);
         }
+
+        if (tempAudioBox) {
+          drawPlayingHighlight(ctx, tempAudioBox);
+        }
       }
 
       setLoading(false);
@@ -134,7 +144,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     render();
 
     return () => { active = false; };
-  }, [item, config, localGtBoxes, isEditMode, hoveredStat, externalHighlight, playingBox, playhead]); // Re-render when boxes or playhead change
+  }, [item, config, localGtBoxes, isEditMode, hoveredStat, externalHighlight, playingBox, playhead, tempAudioBox]); // Re-render when boxes or playhead change
 
   // Global Deletion Listener
   useEffect(() => {
@@ -279,16 +289,54 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
   // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!isEditMode) return;
+    if (e.button !== 0) return; // Only left click
 
     // Grab focus so keyboard events target this component correctly if using target listeners
     // (Though we moved to document listener, this is still good practice)
     containerRef.current?.focus();
 
-    if (e.button !== 0) return; // Only left click
-
     const coords = getImgCoords(e);
     const { width, height } = canvasRef.current!;
+
+    if (!isEditMode) {
+      if (!cachedData) return;
+      let hit: BoundingBox | null = null;
+      let minArea = Infinity;
+
+      for (const b of cachedData.boxes) {
+        const bx1 = b.x - b.w / 2;
+        const bx2 = b.x + b.w / 2;
+        const by1 = b.y - b.h / 2;
+        const by2 = b.y + b.h / 2;
+
+        if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
+          const area = b.w * b.h;
+          if (area < minArea) {
+            minArea = area;
+            hit = b;
+          }
+        }
+      }
+
+      if (hit) {
+        setDragState({
+          mode: 'move',
+          boxIndex: -1,
+          startX: coords.x,
+          startY: coords.y,
+          initialBox: { ...hit }
+        });
+      } else {
+        setDragState({
+          mode: 'create',
+          boxIndex: -2,
+          startX: coords.x,
+          startY: coords.y
+        });
+        setTempAudioBox({ classId: 0, x: coords.x, y: coords.y, w: 0, h: 0, confidence: 1 });
+      }
+      return;
+    }
 
     // 1. Check ALL GT boxes for handle hits first (to prioritize resizing over selection/creation)
     for (let i = localGtBoxes.length - 1; i >= 0; i--) {
@@ -375,8 +423,31 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const coords = getImgCoords(e);
 
-    if (isEditMode && dragState) {
+    if (dragState) {
       e.preventDefault();
+
+      if (!isEditMode) {
+        if (dragState.mode === 'create' && dragState.boxIndex === -2) {
+          const startX = dragState.startX;
+          const startY = dragState.startY;
+          const currentX = coords.x;
+          const currentY = coords.y;
+
+          const minX = Math.min(startX, currentX);
+          const maxX = Math.max(startX, currentX);
+          const minY = Math.min(startY, currentY);
+          const maxY = Math.max(startY, currentY);
+
+          const w = maxX - minX;
+          const h = maxY - minY;
+          const x = minX + w / 2;
+          const y = minY + h / 2;
+
+          setTempAudioBox({ classId: 0, x, y, w, h, confidence: 1 });
+        }
+        return;
+      }
+
       if (dragState.mode === 'move' && dragState.initialBox) {
         const dx = coords.x - dragState.startX;
         const dy = coords.y - dragState.startY;
@@ -451,9 +522,26 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (!isEditMode) return;
-
     if (dragState) {
+      if (!isEditMode) {
+        if (dragState.mode === 'create' && dragState.boxIndex === -2 && tempAudioBox) {
+          if (tempAudioBox.w > 0.005 && tempAudioBox.h > 0.005) {
+            playAudioForBox(tempAudioBox);
+          } else {
+            setTempAudioBox(null);
+          }
+        } else if (dragState.mode === 'move' && dragState.boxIndex === -1 && dragState.initialBox) {
+          const coords = getImgCoords(e);
+          const dx = coords.x - dragState.startX;
+          const dy = coords.y - dragState.startY;
+          if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
+            playAudioForBox(dragState.initialBox);
+          }
+        }
+        setDragState(null);
+        return;
+      }
+
       if (dragState.mode === 'create') {
         const box = localGtBoxes[dragState.boxIndex];
         if (box && (box.w < 0.001 || box.h < 0.001)) {
@@ -524,6 +612,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     if (isEditMode) {
       const coords = getImgCoords(e);
       let hit = -1;
+      let hitPredBox: BoundingBox | null = null;
+      let hitPredArea = Infinity;
 
       // Perform hit detection
       for (let i = localGtBoxes.length - 1; i >= 0; i--) {
@@ -542,9 +632,34 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       if (hit !== -1) {
         setSelectedBoxIdx(hit);
         setContextMenu({ x: e.clientX, y: e.clientY });
+        setContextPredBox(null);
       } else {
-        // Option: Close menu if clicking empty space? Usually better to just prevent default
-        setContextMenu(null);
+        if (config.showPredInEditMode && cachedData) {
+          for (const b of cachedData.boxes) {
+            if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
+              const bx1 = b.x - b.w / 2;
+              const bx2 = b.x + b.w / 2;
+              const by1 = b.y - b.h / 2;
+              const by2 = b.y + b.h / 2;
+              if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
+                const area = b.w * b.h;
+                if (area < hitPredArea) {
+                  hitPredArea = area;
+                  hitPredBox = b;
+                }
+              }
+            }
+          }
+        }
+
+        if (hitPredBox) {
+          setSelectedBoxIdx(null);
+          setContextPredBox(hitPredBox);
+          setContextMenu({ x: e.clientX, y: e.clientY });
+        } else {
+          setContextMenu(null);
+          setContextPredBox(null);
+        }
       }
       return;
     }
@@ -556,44 +671,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
 
 
-  const handlePlayAudio = async () => {
+  const playAudioForBox = async (box: BoundingBox) => {
     if (!audioPlayer || !audioFiles) return;
-
-    let box: BoundingBox | undefined;
-    if (selectedBoxIdx !== null) {
-      box = localGtBoxes[selectedBoxIdx];
-    } else if (cachedData && contextMenu) {
-      if (canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect();
-        const scaleX = canvasRef.current.width / rect.width;
-        const scaleY = canvasRef.current.height / rect.height;
-        const mx = (contextMenu.x - rect.left) * scaleX;
-        const my = (contextMenu.y - rect.top) * scaleY;
-        const nx = mx / canvasRef.current.width;
-        const ny = my / canvasRef.current.height;
-
-        let bestMatch = null;
-        let minArea = 100;
-
-        for (const b of cachedData.boxes) {
-          const bx1 = b.x - b.w / 2;
-          const bx2 = b.x + b.w / 2;
-          const by1 = b.y - b.h / 2;
-          const by2 = b.y + b.h / 2;
-
-          if (nx >= bx1 && nx <= bx2 && ny >= by1 && ny <= by2) {
-            const area = b.w * b.h;
-            if (area < minArea) {
-              minArea = area;
-              bestMatch = b;
-            }
-          }
-        }
-        if (bestMatch) box = bestMatch;
-      }
-    }
-
-    if (!box) return;
 
     const audioName = getAudioFilename(item.name);
     const fileHandle = audioFiles[audioName];
@@ -626,6 +705,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     // Set Playing Highlight
     setPlayingBox(box);
     setPlayhead(0);
+    setTempAudioBox(null);
 
     // Playhead Animation
     const startTimestamp = performance.now();
@@ -650,9 +730,53 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
     // Clear highlight after duration
     setTimeout(() => {
-      setPlayingBox(null);
-      setPlayhead(null);
+      setPlayingBox((prev) => {
+        if (prev === box) {
+          setTimeout(() => setPlayhead(null), 0);
+          return null;
+        }
+        return prev;
+      });
     }, duration + 100); // Small buffer
+  };
+
+  const handlePlayAudio = async () => {
+    let box: BoundingBox | undefined;
+    if (selectedBoxIdx !== null) {
+      box = localGtBoxes[selectedBoxIdx];
+    } else if (cachedData && contextMenu) {
+      if (canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const scaleX = canvasRef.current.width / rect.width;
+        const scaleY = canvasRef.current.height / rect.height;
+        const mx = (contextMenu.x - rect.left) * scaleX;
+        const my = (contextMenu.y - rect.top) * scaleY;
+        const nx = mx / canvasRef.current.width;
+        const ny = my / canvasRef.current.height;
+
+        let bestMatch = null;
+        let minArea = Infinity;
+
+        for (const b of cachedData.boxes) {
+          const bx1 = b.x - b.w / 2;
+          const bx2 = b.x + b.w / 2;
+          const by1 = b.y - b.h / 2;
+          const by2 = b.y + b.h / 2;
+
+          if (nx >= bx1 && nx <= bx2 && ny >= by1 && ny <= by2) {
+            const area = b.w * b.h;
+            if (area < minArea) {
+              minArea = area;
+              bestMatch = b;
+            }
+          }
+        }
+        if (bestMatch) box = bestMatch;
+      }
+    }
+
+    if (!box) return;
+    await playAudioForBox(box);
   };
 
   const handleDeleteSelected = () => {
@@ -706,14 +830,47 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
-          {isEditMode && selectedBoxIdx !== null ? (
-            <button
-              onClick={handleDeleteSelected}
-              className="text-left px-4 py-2 text-xs text-red-400 hover:bg-slate-700 hover:text-red-300 flex items-center gap-2 transition-colors w-full"
-            >
-              <Trash2 className="w-3 h-3" />
-              Delete Box
-            </button>
+          {isEditMode ? (
+            <>
+              {selectedBoxIdx !== null && (
+                <>
+                  <button
+                    onClick={handleDeleteSelected}
+                    className="text-left px-4 py-2 text-xs text-red-400 hover:bg-slate-700 hover:text-red-300 flex items-center gap-2 transition-colors w-full border-b border-slate-700"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Delete Box
+                  </button>
+                  {audioFiles && Object.keys(audioFiles).length > 0 && (
+                    <button
+                      onClick={() => playAudioForBox(localGtBoxes[selectedBoxIdx])}
+                      className="text-left px-4 py-2 text-xs text-indigo-300 hover:bg-slate-700 hover:text-indigo-200 flex items-center gap-2 transition-colors w-full"
+                    >
+                      <Download className="w-3 h-3 rotate-90" />
+                      Play Audio Region
+                    </button>
+                  )}
+                </>
+              )}
+              {contextPredBox && (
+                <button
+                  onClick={() => {
+                    const newBox = { ...contextPredBox, confidence: 1.0, type: undefined };
+                    // @ts-ignore
+                    delete newBox.type; // strip type if it got copied
+                    const newBoxes = [...localGtBoxes, newBox];
+                    setLocalGtBoxes(newBoxes);
+                    onUpdateGt?.(item.name, newBoxes);
+                    setContextMenu(null);
+                    setContextPredBox(null);
+                  }}
+                  className="text-left px-4 py-2 text-xs text-emerald-400 hover:bg-slate-700 hover:text-emerald-300 flex items-center gap-2 transition-colors w-full"
+                >
+                  <Check className="w-3 h-3" />
+                  Accept Prediction
+                </button>
+              )}
+            </>
           ) : (
             <>
               {/* Play Audio Option */}

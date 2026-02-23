@@ -52,9 +52,11 @@ export const getAudioFilename = (imageName: string): string => {
 
 export class AudioPlayer {
     private context: AudioContext;
-    private audioBuffer: AudioBuffer | null = null;
-    private currentSource: AudioBufferSourceNode | null = null;
+    private audioElement: HTMLAudioElement | null = null;
+    private audioSource: MediaElementAudioSourceNode | null = null;
     private currentFilename: string | null = null;
+    private currentObjectUrl: string | null = null;
+    private stopTimeout: any = null;
 
     constructor() {
         this.context = getAudioContext();
@@ -62,26 +64,41 @@ export class AudioPlayer {
 
     async loadAudioFile(file: File | FileSystemFileHandle): Promise<void> {
         const f = file instanceof File ? file : await (file as FileSystemFileHandle).getFile();
-        if (this.currentFilename === f.name && this.audioBuffer) return;
+        if (this.currentFilename === f.name && this.audioElement) return;
 
         this.currentFilename = f.name;
-        const arrayBuffer = await f.arrayBuffer();
-        this.audioBuffer = await this.context.decodeAudioData(arrayBuffer);
+
+        if (this.currentObjectUrl) {
+            URL.revokeObjectURL(this.currentObjectUrl);
+        }
+
+        if (this.audioSource) {
+            this.audioSource.disconnect();
+            this.audioSource = null;
+        }
+
+        this.currentObjectUrl = URL.createObjectURL(f);
+        this.audioElement = new Audio();
+        this.audioElement.src = this.currentObjectUrl;
+
+        this.audioSource = this.context.createMediaElementSource(this.audioElement);
     }
 
     stop() {
-        if (this.currentSource) {
-            try {
-                this.currentSource.stop();
-            } catch (e) {
-                // ignore
-            }
-            this.currentSource = null;
+        if (this.audioElement) {
+            this.audioElement.pause();
+        }
+        if (this.stopTimeout) {
+            clearTimeout(this.stopTimeout);
+            this.stopTimeout = null;
+        }
+        if (this.audioSource) {
+            try { this.audioSource.disconnect(); } catch (e) { }
         }
     }
 
     async playSubRegion(options: AudioPlayOptions) {
-        if (!this.audioBuffer) return;
+        if (!this.audioElement || !this.audioSource) return;
 
         // Ensure context is resumed (browser requirement)
         if (this.context.state === 'suspended') {
@@ -89,9 +106,6 @@ export class AudioPlayer {
         }
 
         this.stop();
-
-        const source = this.context.createBufferSource();
-        source.buffer = this.audioBuffer;
 
         // Bandpass Filter
         const minFreq = options.minFreq ?? 500;
@@ -105,14 +119,23 @@ export class AudioPlayer {
         lowpass.type = 'lowpass';
         lowpass.frequency.value = maxFreq;
 
-        source.connect(highpass);
+        this.audioSource.connect(highpass);
         highpass.connect(lowpass);
         lowpass.connect(this.context.destination);
 
         const offsetSeconds = options.startTimeMs / 1000;
         const durationSeconds = options.durationMs / 1000;
 
-        source.start(0, offsetSeconds, durationSeconds);
-        this.currentSource = source;
+        this.audioElement.currentTime = offsetSeconds;
+
+        try {
+            await this.audioElement.play();
+
+            this.stopTimeout = setTimeout(() => {
+                this.audioElement?.pause();
+            }, durationSeconds * 1000);
+        } catch (e) {
+            console.error("Audio playback failed", e);
+        }
     }
 }

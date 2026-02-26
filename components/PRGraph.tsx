@@ -206,25 +206,57 @@ const Chart = ({ data, config, type, itemsCount }: { data: PRPoint[], config: Vi
 const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
   const [data, setData] = useState<PRPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isStale, setIsStale] = useState(false);
+  const [lastComputationToken, setLastComputationToken] = useState('');
 
+  // Determine if data is stale by creating a simple hash/string of current items & config
   useEffect(() => {
-    const compute = async () => {
-      setLoading(true);
-      try {
-        await new Promise(r => setTimeout(r, 10));
-        const points = await calculatePRStats(items, config.ioMinThreshold);
-        setData(points);
-      } catch (e) {
-        console.error("Error computing PR stats", e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    compute();
-  }, [items, config.ioMinThreshold]);
+    const currentToken = `${items.length}_${config.ioMinThreshold}_${config.confThreshold}`;
+    if (currentToken !== lastComputationToken && lastComputationToken !== '') {
+      setIsStale(true);
+    }
+  }, [items, config.ioMinThreshold, config.confThreshold, lastComputationToken]);
+
+  const compute = async () => {
+    setLoading(true);
+    setIsStale(false);
+    try {
+      await new Promise(r => setTimeout(r, 10)); // UI thread breathing room
+      const points = await calculatePRStats(items, config.ioMinThreshold);
+      setData(points);
+      setLastComputationToken(`${items.length}_${config.ioMinThreshold}_${config.confThreshold}`);
+    } catch (e) {
+      console.error("Error computing PR stats", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Run only initially when it's empty (optional, but good for zero-state)
+  useEffect(() => {
+    if (data.length === 0 && items.length > 0) {
+      compute();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <div className="flex-1 flex flex-col p-4 bg-surface/50 h-full overflow-y-auto custom-scrollbar relative border-l border-slate-700">
+    <div className="flex-1 flex flex-col pt-2 pb-4 px-4 bg-surface/50 h-full overflow-y-auto custom-scrollbar relative border-l border-slate-700">
+      <div className="flex items-center justify-between mb-4 mt-2 sticky top-0 z-10 bg-surface/90 backdrop-blur-sm py-2 border-b border-slate-700 mx-[-1rem] px-4">
+        <div>
+          <span className="text-sm font-bold text-slate-200">Metrics Generator</span>
+          {isStale && <span className="ml-2 text-[10px] text-amber-500 font-semibold bg-amber-500/10 px-1.5 py-0.5 rounded">Stale</span>}
+        </div>
+        <button
+          onClick={compute}
+          disabled={loading || items.length === 0}
+          className="bg-primary/20 hover:bg-primary/40 text-primary border border-primary/50 text-xs px-3 py-1.5 rounded transition-colors disabled:opacity-50 flex items-center gap-1 font-semibold"
+        >
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+          {loading ? 'Computing...' : 'Recalculate'}
+        </button>
+      </div>
+
       {loading ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-4">
           <Loader2 className="w-8 h-8 text-primary animate-spin" />

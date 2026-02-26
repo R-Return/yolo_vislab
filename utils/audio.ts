@@ -14,6 +14,7 @@ export interface AudioPlayOptions {
     durationMs: number;
     minFreq?: number;
     maxFreq?: number;
+    playbackSpeed?: number;
 }
 
 /**
@@ -22,7 +23,7 @@ export interface AudioPlayOptions {
  * Example: Bridge2958_20200706$070000_ch1_w000001_t5000.png -> 5000
  */
 export const extractStartTimeFromFilename = (filename: string): number => {
-    const match = filename.match(/t(\d+)/);
+    const match = filename.match(/_t(\d+)(?:\.\w+)?$/);
     if (match && match[1]) {
         return parseInt(match[1], 10);
     }
@@ -57,6 +58,7 @@ export class AudioPlayer {
     private currentFilename: string | null = null;
     private currentObjectUrl: string | null = null;
     private stopTimeout: any = null;
+    private playbackEndTime: number | null = null;
 
     constructor() {
         this.context = getAudioContext();
@@ -92,9 +94,38 @@ export class AudioPlayer {
             clearTimeout(this.stopTimeout);
             this.stopTimeout = null;
         }
+        this.playbackEndTime = null;
         if (this.audioSource) {
             try { this.audioSource.disconnect(); } catch (e) { }
         }
+    }
+
+    togglePause() {
+        if (!this.audioElement) return;
+        if (this.audioElement.paused) {
+            this.audioElement.play().catch(e => console.error("Resume failed", e));
+            if (this.playbackEndTime !== null) {
+                const remainingMs = (this.playbackEndTime - this.audioElement.currentTime) * 1000 / this.audioElement.playbackRate;
+                if (remainingMs > 0) {
+                    this.stopTimeout = setTimeout(() => {
+                        this.audioElement?.pause();
+                    }, remainingMs);
+                } else {
+                    this.audioElement.pause();
+                }
+            }
+        } else {
+            this.audioElement.pause();
+            if (this.stopTimeout) {
+                clearTimeout(this.stopTimeout);
+                this.stopTimeout = null;
+            }
+        }
+    }
+
+    isPaused(): boolean {
+        if (!this.audioElement) return true;
+        return this.audioElement.paused;
     }
 
     async playSubRegion(options: AudioPlayOptions) {
@@ -119,21 +150,36 @@ export class AudioPlayer {
         lowpass.type = 'lowpass';
         lowpass.frequency.value = maxFreq;
 
-        this.audioSource.connect(highpass);
+        // Channel Splitter
+        const channel1 = this.currentFilename?.includes('ch1');
+        const channel2 = this.currentFilename?.includes('ch2');
+
+        if (channel1 || channel2) {
+            const splitter = this.context.createChannelSplitter(2);
+            this.audioSource.connect(splitter);
+            const channel = channel1 ? 0 : 1;
+            splitter.connect(highpass, channel);
+        } else {
+            this.audioSource.connect(highpass);
+        }
+
         highpass.connect(lowpass);
         lowpass.connect(this.context.destination);
 
         const offsetSeconds = options.startTimeMs / 1000;
         const durationSeconds = options.durationMs / 1000;
+        const playbackSpeed = options.playbackSpeed ?? 1.0;
 
         this.audioElement.currentTime = offsetSeconds;
+        this.audioElement.playbackRate = playbackSpeed;
+        this.playbackEndTime = offsetSeconds + durationSeconds;
 
         try {
             await this.audioElement.play();
 
             this.stopTimeout = setTimeout(() => {
                 this.audioElement?.pause();
-            }, durationSeconds * 1000);
+            }, (durationSeconds / playbackSpeed) * 1000);
         } catch (e) {
             console.error("Audio playback failed", e);
         }

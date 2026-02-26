@@ -129,6 +129,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {/* Grid Size Toggle */}
           <div className="flex gap-2 mb-3">
             <button
+              onClick={() => onConfigChange({ ...config, gridSize: 1 })}
+              className={`flex-1 py-1.5 px-2 rounded text-xs flex items-center justify-center gap-1 border ${config.gridSize === 1 ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-700 border-transparent text-slate-400'}`}
+            >
+              <LayoutGrid className="w-3 h-3" /> 1x1
+            </button>
+            <button
               onClick={() => onConfigChange({ ...config, gridSize: 9 })}
               className={`flex-1 py-1.5 px-2 rounded text-xs flex items-center justify-center gap-1 border ${config.gridSize === 9 ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-700 border-transparent text-slate-400'}`}
             >
@@ -351,6 +357,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 <div>
                   <div className="flex justify-between mb-1"><label className="text-slate-300 text-sm">Max Frequency</label><span className="text-xs text-primary">{config.audio?.maxFreq} Hz</span></div>
                   <input type="range" min="0" max="20000" step="100" value={config.audio?.maxFreq} onChange={(e) => onConfigChange({ ...config, audio: { ...config.audio!, maxFreq: parseInt(e.target.value) } })} className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary" />
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1"><label className="text-slate-300 text-sm">Clip Duration (sec)</label><span className="text-xs text-primary">{config.audio?.clipSec ?? 6.0}s</span></div>
+                  <input type="range" min="1.0" max="15.0" step="0.5" value={config.audio?.clipSec ?? 6.0} onChange={(e) => onConfigChange({ ...config, audio: { ...config.audio!, clipSec: parseFloat(e.target.value) } })} className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary" />
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1"><label className="text-slate-300 text-sm">Frame Stride (sec)</label><span className="text-xs text-primary">{config.audio?.strideSec ?? 5.0}s</span></div>
+                  <input type="range" min="1.0" max="15.0" step="0.5" value={config.audio?.strideSec ?? 5.0} onChange={(e) => onConfigChange({ ...config, audio: { ...config.audio!, strideSec: parseFloat(e.target.value) } })} className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary" />
                 </div>
               </section>
             </div>

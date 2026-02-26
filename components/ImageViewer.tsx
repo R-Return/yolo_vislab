@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
-import { Download, Loader2, Trash2, Check } from 'lucide-react';
+import { Download, Loader2, Trash2, Check, Copy } from 'lucide-react';
 import { ImageItem, VisualizationConfig, BoxType, RenderBox, HitRegion, BoundingBox } from '../types';
 import { drawVisualization } from '../utils/render';
 import { calculateMatches } from '../utils/yolo';
@@ -13,6 +13,9 @@ interface ImageViewerProps {
   onUpdateGt?: (fileName: string, newBoxes: BoundingBox[]) => void;
   audioPlayer?: any; // Avoiding circular dependency if possible, or use type
   audioFiles?: Record<string, File | FileSystemFileHandle>;
+  isFocused?: boolean;
+  onFocusToggle?: () => void;
+  onSetFocus?: () => void;
 }
 
 interface DragState {
@@ -24,9 +27,10 @@ interface DragState {
   initialBox?: BoundingBox;
   // For resize: which handle?
   handle?: 'tl' | 'tr' | 'bl' | 'br';
+  potentialSelect?: number;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles, isFocused, onFocusToggle, onSetFocus }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -35,6 +39,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const [selectedBoxIdx, setSelectedBoxIdx] = useState<number | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [playingBox, setPlayingBox] = useState<BoundingBox | null>(null);
+  const [hidePlayingBorder, setHidePlayingBorder] = useState(false);
   const [playhead, setPlayhead] = useState<number | null>(null); // 0 to 1 progress
   const [tempAudioBox, setTempAudioBox] = useState<BoundingBox | null>(null);
   const [contextPredBox, setContextPredBox] = useState<BoundingBox | null>(null);
@@ -52,11 +57,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [hoveredStat, setHoveredStat] = useState<BoxType | null>(null);
 
+  // Crosshairs State
+  const [hoverCoords, setHoverCoords] = useState<{ x: number, y: number, timePx: number, freqHz: number } | null>(null);
+
   // Sync props to local state when item changes (and not currently dragging/editing locally)
   useEffect(() => {
     setLocalGtBoxes(item.gtData || []);
     setSelectedBoxIdx(null);
     setPlayingBox(null);
+    setHidePlayingBorder(false);
     setTempAudioBox(null);
   }, [item, item.gtData]); // Only reset when item specifically changes
 
@@ -129,13 +138,19 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         }
 
         // Draw Playing Highlight
-        if (playingBox) {
+        if (playingBox && !hidePlayingBorder) {
           drawPlayingHighlight(ctx, playingBox);
+        } else if (playhead !== null) {
+          // Playhead without box highlight (ambient full-image generation)
+          drawPlayingHighlight(ctx, null as any); // Render just playhead
         }
+      } else if (playhead !== null) {
+        // Playhead without box highlight (ambient full-image generation)
+        drawPlayingHighlight(ctx, null as any); // Render just playhead
+      }
 
-        if (tempAudioBox) {
-          drawPlayingHighlight(ctx, tempAudioBox);
-        }
+      if (tempAudioBox) {
+        drawPlayingHighlight(ctx, tempAudioBox);
       }
 
       setLoading(false);
@@ -144,20 +159,21 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     render();
 
     return () => { active = false; };
-  }, [item, config, localGtBoxes, isEditMode, hoveredStat, externalHighlight, playingBox, playhead, tempAudioBox]); // Re-render when boxes or playhead change
+  }, [item, config, localGtBoxes, isEditMode, hoveredStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
 
   // Global Deletion Listener
   useEffect(() => {
     if (!isEditMode || selectedBoxIdx === null) return;
 
     const onKey = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input field (like Page Jump)
+      // Don't trigger if user is typing in an input field
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
         return;
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
+        e.stopPropagation();
         const newBoxes = localGtBoxes.filter((_, i) => i !== selectedBoxIdx);
         setLocalGtBoxes(newBoxes);
         setSelectedBoxIdx(null);
@@ -165,38 +181,73 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       }
     };
 
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    // Use capture phase to ensure we aren't blocked by generic bubbling stoppers
+    document.addEventListener('keydown', onKey, { capture: true });
+    return () => document.removeEventListener('keydown', onKey, { capture: true });
   }, [isEditMode, selectedBoxIdx, localGtBoxes, item, onUpdateGt]);
 
-  // Helper to draw specific box highlight
-  const drawPlayingHighlight = (ctx: CanvasRenderingContext2D, box: BoundingBox) => {
-    const { width, height } = ctx.canvas;
-    const x = box.x * width;
-    const y = box.y * height;
-    const w = box.w * width;
-    const h = box.h * height;
+  // Spacebar Playback for Focused Item
+  useEffect(() => {
+    if (!isFocused) return;
+    const onSpace = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (playhead !== null) {
+          audioPlayer?.togglePause();
+        } else {
+          const fullImageAudioBox: BoundingBox = {
+            classId: 0, x: 0.5, y: 0.5, w: 1.0, h: 1.0, confidence: 1.0
+          };
+          playAudioForBox(fullImageAudioBox, false, true);
+        }
+      }
+    };
+    document.addEventListener('keydown', onSpace);
+    return () => document.removeEventListener('keydown', onSpace);
+  }, [isFocused, playhead, audioPlayer, item]);
 
-    const highlightColor = config.audio?.highlightColor ?? '#00ff00';
+  // Helper to draw specific box highlight
+  const drawPlayingHighlight = (ctx: CanvasRenderingContext2D, box: BoundingBox | null) => {
+    const { width, height } = ctx.canvas;
+
+    // Draw Box if present
+    if (box) {
+      const x = box.x * width;
+      const y = box.y * height;
+      const w = box.w * width;
+      const h = box.h * height;
+
+      const highlightColor = config.audio?.highlightColor ?? '#00ff00';
+
+      ctx.save();
+      ctx.strokeStyle = highlightColor;
+      ctx.lineWidth = 4;
+      ctx.shadowColor = highlightColor;
+      ctx.shadowBlur = 10;
+      ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+      ctx.restore();
+    }
 
     ctx.save();
-    ctx.strokeStyle = highlightColor;
-    ctx.lineWidth = 4;
-    ctx.shadowColor = highlightColor;
-    ctx.shadowBlur = 10;
-    ctx.strokeRect(x - w / 2, y - h / 2, w, h);
 
     // Draw Playhead (progress line)
+    // If playingBox is null but playhead exists, we are playing a hidden box (full image).
     if (playhead !== null) {
-      const lx = x - w / 2;
-      const playX = lx + (w * playhead);
+      // Base the playhead on the box dimensions, or full width if no box is highlighted
+      const actualW = box ? (box.w * width) : width;
+      const actualX = box ? ((box.x * width) - actualW / 2) : 0;
+      const actualY = box ? (box.y * height) : (height / 2);
+      const actualH = box ? (box.h * height) : height;
+
+      const playX = actualX + (actualW * playhead);
       ctx.beginPath();
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.shadowBlur = 0;
-      ctx.setLineDash([2, 2]);
-      ctx.moveTo(playX, y - h / 2);
-      ctx.lineTo(playX, y + h / 2);
+      ctx.setLineDash([2, 5]);
+      ctx.moveTo(playX, actualY - actualH / 2);
+      ctx.lineTo(playX, actualY + actualH / 2);
       ctx.stroke();
     }
 
@@ -318,28 +369,20 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         }
       }
 
-      if (hit) {
-        setDragState({
-          mode: 'move',
-          boxIndex: -1,
-          startX: coords.x,
-          startY: coords.y,
-          initialBox: { ...hit }
-        });
-      } else {
-        setDragState({
-          mode: 'create',
-          boxIndex: -2,
-          startX: coords.x,
-          startY: coords.y
-        });
-        setTempAudioBox({ classId: 0, x: coords.x, y: coords.y, w: 0, h: 0, confidence: 1 });
-      }
+      setDragState({
+        mode: 'create',
+        boxIndex: -2,
+        startX: coords.x,
+        startY: coords.y,
+        initialBox: hit ? { ...hit } : undefined
+      });
+      setTempAudioBox({ classId: 0, x: coords.x, y: coords.y, w: 0, h: 0, confidence: 1 });
       return;
     }
 
     // 1. Check ALL GT boxes for handle hits first (to prioritize resizing over selection/creation)
     for (let i = localGtBoxes.length - 1; i >= 0; i--) {
+      if (i !== selectedBoxIdx) continue; // Only allow resizing the currently selected box
       const b = localGtBoxes[i];
       const lx = (b.x - b.w / 2) * width;
       const ly = (b.y - b.h / 2) * height;
@@ -371,8 +414,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       }
     }
 
-    // 2. Check collision with any GT box body (Reverse order)
+    // 2. Check collision with any GT box body (Find the smallest overlapping box)
     let hit = -1;
+    let minArea = Infinity;
+
     for (let i = localGtBoxes.length - 1; i >= 0; i--) {
       const b = localGtBoxes[i];
       const bx1 = b.x - b.w / 2;
@@ -381,13 +426,16 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       const by2 = b.y + b.h / 2;
 
       if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
-        hit = i;
-        break;
+        const area = b.w * b.h;
+        if (area < minArea) {
+          minArea = area;
+          hit = i;
+        }
       }
     }
 
-    if (hit !== -1) {
-      setSelectedBoxIdx(hit);
+    if (hit !== -1 && hit === selectedBoxIdx) {
+      // Only move if it is already selected
       setDragState({
         mode: 'move',
         boxIndex: hit,
@@ -415,7 +463,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         mode: 'create',
         boxIndex: newIndex,
         startX: coords.x,
-        startY: coords.y
+        startY: coords.y,
+        potentialSelect: hit !== -1 ? hit : undefined
       });
     }
   };
@@ -509,6 +558,32 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
     // Standard Hover Logic (only if not dragging)
     if (!cachedData || !canvasRef.current) return;
+
+    // Calculate Tooltip info
+    const imageStartTime = extractStartTimeFromFilename(item.name);
+    const clipSec = config.audio?.clipSec ?? 6.0;
+    const TIME_TOTAL = clipSec * 1000;
+    const timeAtCursor = imageStartTime + (coords.x * TIME_TOTAL);
+
+    const minF = config.audio?.minFreq ?? 500;
+    const maxF = config.audio?.maxFreq ?? 12000;
+    const freqAtCursor = maxF - (coords.y * (maxF - minF));
+
+    let cursorX = coords.rawX;
+    let cursorY = coords.rawY;
+    if (containerRef.current) {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      cursorX = e.clientX - containerRect.left;
+      cursorY = e.clientY - containerRect.top;
+    }
+
+    setHoverCoords({
+      x: cursorX,
+      y: cursorY,
+      timePx: timeAtCursor / 1000,
+      freqHz: freqAtCursor
+    });
+
     const hit = cachedData.hitRegions.find(r =>
       coords.rawX >= r.x && coords.rawX <= r.x + r.w &&
       coords.rawY >= r.y && coords.rawY <= r.y + r.h
@@ -526,17 +601,21 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       if (!isEditMode) {
         if (dragState.mode === 'create' && dragState.boxIndex === -2 && tempAudioBox) {
           if (tempAudioBox.w > 0.005 && tempAudioBox.h > 0.005) {
-            playAudioForBox(tempAudioBox);
+            playAudioForBox(tempAudioBox, e.shiftKey);
           } else {
-            setTempAudioBox(null);
+            // It was a click!
+            if (dragState.initialBox) {
+              playAudioForBox(dragState.initialBox, e.shiftKey);
+            } else {
+              // Clicked on empty space! Play full image audio.
+              const fullImageAudioBox: BoundingBox = {
+                classId: 0,
+                x: 0.5, y: 0.5, w: 1.0, h: 1.0, confidence: 1.0
+              };
+              playAudioForBox(fullImageAudioBox, false, true); // Play full image without drawing border
+            }
           }
-        } else if (dragState.mode === 'move' && dragState.boxIndex === -1 && dragState.initialBox) {
-          const coords = getImgCoords(e);
-          const dx = coords.x - dragState.startX;
-          const dy = coords.y - dragState.startY;
-          if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
-            playAudioForBox(dragState.initialBox);
-          }
+          setTempAudioBox(null);
         }
         setDragState(null);
         return;
@@ -545,19 +624,53 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       if (dragState.mode === 'create') {
         const box = localGtBoxes[dragState.boxIndex];
         if (box && (box.w < 0.001 || box.h < 0.001)) {
-          // Remove if too small
           const newBoxes = localGtBoxes.filter((_, i) => i !== dragState.boxIndex);
           setLocalGtBoxes(newBoxes);
-          setSelectedBoxIdx(null);
+          if (dragState.potentialSelect !== undefined) {
+            setSelectedBoxIdx(dragState.potentialSelect);
+          } else {
+            setSelectedBoxIdx(null);
+          }
         } else {
           onUpdateGt?.(item.name, localGtBoxes);
         }
       } else if (dragState.mode === 'move' || dragState.mode === 'resize') {
-        onUpdateGt?.(item.name, localGtBoxes);
+        const currentBox = localGtBoxes[dragState.boxIndex];
+        const initial = dragState.initialBox;
+        if (currentBox && initial) {
+          if (currentBox.x !== initial.x || currentBox.y !== initial.y || currentBox.w !== initial.w || currentBox.h !== initial.h) {
+            onUpdateGt?.(item.name, localGtBoxes);
+          }
+        } else {
+          onUpdateGt?.(item.name, localGtBoxes);
+        }
       }
       setDragState(null);
     }
   };
+
+  // Add Global Mouse Listeners when Dragging
+  useEffect(() => {
+    if (!dragState) return;
+
+    // Use a slightly different mouse move for global to map accurately 
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // Mock React.MouseEvent interface since getImgCoords expects it
+      handleMouseMove(e as unknown as React.MouseEvent<HTMLCanvasElement>);
+    };
+
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      handleMouseUp(e as unknown as React.MouseEvent);
+    };
+
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [dragState, handleMouseMove, handleMouseUp]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isEditMode || selectedBoxIdx === null) return;
@@ -568,6 +681,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       onUpdateGt?.(item.name, newBoxes);
       e.preventDefault();
     }
+  };
+
+  const handleMouseLeaveCanvas = () => {
+    setHoveredStat(null);
+    setHoverCoords(null);
   };
 
   const handleDownload = async () => {
@@ -611,11 +729,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
     if (isEditMode) {
       const coords = getImgCoords(e);
-      let hit = -1;
+      let hitGt = -1;
+      let hitGtArea = Infinity;
+
       let hitPredBox: BoundingBox | null = null;
       let hitPredArea = Infinity;
 
-      // Perform hit detection
+      // Perform hit detection for GT (smallest area)
       for (let i = localGtBoxes.length - 1; i >= 0; i--) {
         const b = localGtBoxes[i];
         const bx1 = b.x - b.w / 2;
@@ -624,54 +744,52 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         const by2 = b.y + b.h / 2;
 
         if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
-          hit = i;
-          break;
+          const area = b.w * b.h;
+          if (area < hitGtArea) {
+            hitGtArea = area;
+            hitGt = i;
+          }
         }
       }
 
-      if (hit !== -1) {
-        setSelectedBoxIdx(hit);
-        setContextMenu({ x: e.clientX, y: e.clientY });
-        setContextPredBox(null);
-      } else {
-        if (config.showPredInEditMode && cachedData) {
-          for (const b of cachedData.boxes) {
-            if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
-              const bx1 = b.x - b.w / 2;
-              const bx2 = b.x + b.w / 2;
-              const by1 = b.y - b.h / 2;
-              const by2 = b.y + b.h / 2;
-              if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
-                const area = b.w * b.h;
-                if (area < hitPredArea) {
-                  hitPredArea = area;
-                  hitPredBox = b;
-                }
+      // Perform hit detection for Prediction (smallest area)
+      if (config.showPredInEditMode && cachedData) {
+        for (const b of cachedData.boxes) {
+          if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
+            const bx1 = b.x - b.w / 2;
+            const bx2 = b.x + b.w / 2;
+            const by1 = b.y - b.h / 2;
+            const by2 = b.y + b.h / 2;
+            if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
+              const area = b.w * b.h;
+              if (area < hitPredArea) {
+                hitPredArea = area;
+                hitPredBox = b;
               }
             }
           }
         }
+      }
 
-        if (hitPredBox) {
-          setSelectedBoxIdx(null);
-          setContextPredBox(hitPredBox);
-          setContextMenu({ x: e.clientX, y: e.clientY });
-        } else {
-          setContextMenu(null);
-          setContextPredBox(null);
-        }
+      if (hitGt !== -1 || hitPredBox) {
+        setSelectedBoxIdx(hitGt !== -1 ? hitGt : null);
+        setContextPredBox(hitPredBox);
+        setContextMenu({ x: e.clientX, y: e.clientY });
+      } else {
+        setContextMenu(null);
+        setContextPredBox(null);
       }
       return;
     }
 
-    const x = Math.min(e.clientX, window.innerWidth - 180);
-    const y = Math.min(e.clientY, window.innerHeight - 50);
+    const x = Math.min(e.clientX, window.innerWidth - 200);
+    const y = Math.min(e.clientY, window.innerHeight - 80);
     setContextMenu({ x, y });
   };
 
 
 
-  const playAudioForBox = async (box: BoundingBox) => {
+  const playAudioForBox = async (box: BoundingBox, fullBand: boolean = false, hideBorder: boolean = false) => {
     if (!audioPlayer || !audioFiles) return;
 
     const audioName = getAudioFilename(item.name);
@@ -684,37 +802,72 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
     await audioPlayer.loadAudioFile(fileHandle);
 
-    // Calculate Time
+    // Calculate Time based on config
     const imageStartTime = extractStartTimeFromFilename(item.name);
-    const IMAGE_DURATION_MS = 5000; // Assumption based on t0...t5000
+    const clipSec = config.audio?.clipSec ?? 6.0;
+    const IMAGE_DURATION_MS = clipSec * 1000;
 
     const startX = box.x - box.w / 2;
     const startTime = imageStartTime + (startX * IMAGE_DURATION_MS);
     const duration = box.w * IMAGE_DURATION_MS;
+    const playbackSpeed = config.audio?.playbackSpeed ?? 1.0;
 
     // Calculate Frequency
     const minF = config.audio?.minFreq ?? 500;
     const maxF = config.audio?.maxFreq ?? 12000;
 
-    const boxTopY = box.y - box.h / 2;
-    const boxBottomY = box.y + box.h / 2;
+    let freqTop = maxF;
+    let freqBottom = minF;
 
-    const freqTop = maxF - (boxTopY * (maxF - minF)); // Higher Freq
-    const freqBottom = maxF - (boxBottomY * (maxF - minF)); // Lower Freq
+    if (!fullBand) {
+      const boxTopY = box.y - box.h / 2;
+      const boxBottomY = box.y + box.h / 2;
+      freqTop = maxF - (boxTopY * (maxF - minF)); // Higher Freq
+      freqBottom = maxF - (boxBottomY * (maxF - minF)); // Lower Freq
+    }
 
-    // Set Playing Highlight
-    setPlayingBox(box);
+    // Set Playing Highlight Bounds
+    if (fullBand) {
+      setPlayingBox({ ...box, y: 0.5, h: 1.0 });
+    } else {
+      setPlayingBox(box);
+    }
+
+    setHidePlayingBorder(hideBorder || false);
     setPlayhead(0);
     setTempAudioBox(null);
 
     // Playhead Animation
-    const startTimestamp = performance.now();
+    let lastTime = performance.now();
+    let accumulatedTime = 0;
+
+    // Clear highlight immediately before timeout to prevent 1-frame flashes
+    const finishPlayback = () => {
+      setPlayhead(null);
+      setPlayingBox((prev) => (prev === box ? null : prev));
+    };
+
     const animate = (now: number) => {
-      const elapsed = now - startTimestamp;
-      const progress = Math.min(elapsed / duration, 1);
-      setPlayhead(progress);
+      const dt = now - lastTime;
+      lastTime = now;
+
+      if (!audioPlayer?.isPaused?.()) {
+        accumulatedTime += dt;
+      }
+
+      const progress = Math.min(accumulatedTime / (duration / playbackSpeed), 1);
+
+      // Stop animating if playingBox changed externally
+      setPlayingBox((currentBox) => {
+        if (currentBox !== box) return currentBox;
+        setPlayhead(progress);
+        return currentBox;
+      });
+
       if (progress < 1) {
         requestAnimationFrame(animate);
+      } else {
+        finishPlayback();
       }
     };
     requestAnimationFrame(animate);
@@ -723,21 +876,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       startTimeMs: startTime,
       durationMs: duration,
       minFreq: Math.min(freqTop, freqBottom),
-      maxFreq: Math.max(freqTop, freqBottom)
+      maxFreq: Math.max(freqTop, freqBottom),
+      playbackSpeed: playbackSpeed
     });
 
     setContextMenu(null);
-
-    // Clear highlight after duration
-    setTimeout(() => {
-      setPlayingBox((prev) => {
-        if (prev === box) {
-          setTimeout(() => setPlayhead(null), 0);
-          return null;
-        }
-        return prev;
-      });
-    }, duration + 100); // Small buffer
   };
 
   const handlePlayAudio = async () => {
@@ -799,18 +942,37 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   if (config.aspectRatio === '16:9') aspectClass = "aspect-video";
   else if (config.aspectRatio === '4:3') aspectClass = "aspect-[4/3]";
   else if (config.aspectRatio === '1:1') aspectClass = "aspect-square";
-  else if (config.aspectRatio === 'auto') aspectClass = "aspect-auto h-64";
+  else if (config.aspectRatio === 'auto') aspectClass = config.gridSize === 1 ? "aspect-auto min-h-[500px] h-auto" : "aspect-auto h-auto";
+
+  const isLocalModified = JSON.stringify(localGtBoxes) !== JSON.stringify(item.gtData || []);
+  const showModifiedBadge = isLocalModified || item.isModified;
 
   return (
     <div
       ref={containerRef}
-      className={`relative bg-slate-900 rounded-lg overflow-hidden border border-slate-700 ${aspectClass} flex items-center justify-center w-full focus:outline-none`}
+      className={`relative bg-slate-900 rounded-lg overflow-hidden border ${isFocused ? 'border-primary ring-2 ring-primary/50' : 'border-slate-700'} ${aspectClass} flex items-center justify-center w-full focus:outline-none transition-all cursor-pointer pt-2 pr-2 pb-6 pl-10`}
       onContextMenu={handleContextMenu}
-      tabIndex={isEditMode ? 0 : undefined}
+      onClick={onSetFocus}
+      onDoubleClick={onFocusToggle}
+      tabIndex={isEditMode || isFocused ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (isEditMode && selectedBoxIdx !== null && (e.key === 'Backspace' || e.key === 'Delete')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleDeleteSelected();
+        }
+      }}
     >
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
+        </div>
+      )}
+
+      {/* Modified Indicator */}
+      {showModifiedBadge && (
+        <div className="absolute bottom-0 right-0 bg-amber-500/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-tl z-20 pointer-events-none">
+          MODIFIED
         </div>
       )}
 
@@ -820,8 +982,32 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
+        onMouseLeave={handleMouseLeaveCanvas}
       />
+
+      {/* Crosshairs & Tooltip */}
+      {hoverCoords && !isEditMode && (
+        <>
+          <div className="absolute top-0 bottom-0 border-l border-white/40 border-dashed pointer-events-none z-10" style={{ left: hoverCoords.x }} />
+          <div className="absolute left-0 right-0 border-t border-white/40 border-dashed pointer-events-none z-10" style={{ top: hoverCoords.y }} />
+
+          {/* Freq at left edge */}
+          <div
+            className="absolute left-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-y-1/2"
+            style={{ top: hoverCoords.y }}
+          >
+            {Math.round(hoverCoords.freqHz)}Hz
+          </div>
+
+          {/* Time at bottom edge */}
+          <div
+            className="absolute bottom-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-x-1/2"
+            style={{ left: hoverCoords.x }}
+          >
+            {hoverCoords.timePx.toFixed(2)}s
+          </div>
+        </>
+      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -870,6 +1056,17 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
                   Accept Prediction
                 </button>
               )}
+              {/* Copy Filename Option (Edit Mode) */}
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(item.name);
+                  setContextMenu(null);
+                }}
+                className="text-left px-4 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white flex items-center gap-2 transition-colors w-full border-t border-slate-700 mt-1 pt-2"
+              >
+                <Copy className="w-3 h-3" />
+                Copy Filename
+              </button>
             </>
           ) : (
             <>
@@ -883,6 +1080,17 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
                   Play Audio Region
                 </button>
               )}
+              {/* Copy Filename Option */}
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(item.name);
+                  setContextMenu(null);
+                }}
+                className="text-left px-4 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white flex items-center gap-2 transition-colors w-full"
+              >
+                <Copy className="w-3 h-3" />
+                Copy Filename
+              </button>
 
               <button
                 onClick={handleDownload}

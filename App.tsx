@@ -30,7 +30,10 @@ const DEFAULT_CONFIG: VisualizationConfig = {
   audio: {
     minFreq: 500,
     maxFreq: 12000,
-    highlightColor: '#4ade80' // Match TP Pred by default
+    highlightColor: '#4ade80', // Match TP Pred by default
+    clipSec: 6.0,
+    strideSec: 5.0,
+    playbackSpeed: 1.0
   },
   editHighlightColor: '#fbbf24', // Amber/Yellow default
   showPredInEditMode: false
@@ -69,6 +72,9 @@ const App: React.FC = () => {
 
   // Jump Page State
   const [jumpPageInput, setJumpPageInput] = useState("1");
+
+  // Focus and Workflow State
+  const [focusedItemIndex, setFocusedItemIndex] = useState(0);
 
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(250);
@@ -259,9 +265,10 @@ const App: React.FC = () => {
         file: imageFiles[imgName],
         gtData: gtLabels[txtName],
         predData: predLabels[txtName],
+        isModified: modifiedFiles.has(txtName),
       };
     });
-  }, [imageFiles, gtLabels, predLabels]);
+  }, [imageFiles, gtLabels, predLabels, modifiedFiles]);
 
   // Pagination Logic
   const totalPages = Math.ceil(items.length / config.gridSize);
@@ -278,13 +285,73 @@ const App: React.FC = () => {
   // Handle Grid Size Change - Recalculate Page to maintain visual continuity
   useEffect(() => {
     const prevGridSize = prevGridSizeRef.current;
-    if (prevGridSize !== config.gridSize) {
+    if (prevGridSize !== config.gridSize && prevGridSize !== 1 && config.gridSize !== 1) {
       const firstItemIndex = currentPage * prevGridSize;
       const newPage = Math.floor(firstItemIndex / config.gridSize);
       setCurrentPage(newPage);
       prevGridSizeRef.current = config.gridSize;
     }
-  }, [config.gridSize]);
+  }, [config.gridSize, currentPage]);
+
+  const toggleFocusMode = (indexInPage: number) => {
+    if (config.gridSize === 1) {
+      // Revert to prev
+      const revertGrid = prevGridSizeRef.current === 1 ? 9 : prevGridSizeRef.current;
+      const globalIndex = currentPage; // currentPage in 1x1 is the absolute item index
+      const newPage = Math.floor(globalIndex / revertGrid);
+      setConfig({ ...config, gridSize: revertGrid });
+      setCurrentPage(newPage);
+      setFocusedItemIndex(globalIndex % revertGrid);
+    } else {
+      // Enter Focus Mode
+      prevGridSizeRef.current = config.gridSize;
+      const globalIndex = currentPage * config.gridSize + indexInPage;
+      setConfig({ ...config, gridSize: 1 });
+      setCurrentPage(globalIndex);
+      setFocusedItemIndex(0); // 0th index in a 1-item page
+    }
+  };
+
+  // Keyboard Workflow
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      if (currentItems.length === 0) return;
+
+      const cols = config.gridSize === 9 ? 3 : (config.gridSize === 16 ? 4 : 1);
+
+      if (e.key === 'ArrowRight') {
+        setFocusedItemIndex(p => Math.min(p + 1, currentItems.length - 1));
+      } else if (e.key === 'ArrowLeft') {
+        setFocusedItemIndex(p => Math.max(p - 1, 0));
+      } else if (e.key === 'ArrowDown') {
+        setFocusedItemIndex(p => Math.min(p + cols, currentItems.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        setFocusedItemIndex(p => Math.max(p - cols, 0));
+      } else if (e.key === 'd' || e.key === 'D') {
+        setCurrentPage(p => Math.min(p + 1, totalPages - 1));
+      } else if (e.key === 'a' || e.key === 'A') {
+        setCurrentPage(p => Math.max(p - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        toggleFocusMode(focusedItemIndex);
+      }
+
+      // 10. Scroll into view
+      if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
+        setTimeout(() => {
+          // React state needs a tick to update the DOM if we rely on focusedItemIndex change,
+          // but since we know it's moving, it's safer to just let the app render the new focus state first,
+          // then sweep through and snap it. We'll use a data attribute to find the focused element.
+          const activeEl = document.querySelector('[data-focused="true"]');
+          activeEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [config.gridSize, currentItems.length, focusedItemIndex, currentPage]);
 
   // Ensure currentPage is always within valid bounds
   useEffect(() => {
@@ -447,9 +514,11 @@ const App: React.FC = () => {
     }
   };
 
-  const gridClass = config.gridSize === 9
-    ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
-    : "grid-cols-2 md:grid-cols-3 xl:grid-cols-4";
+  const gridClass = config.gridSize === 1
+    ? "grid-cols-1 justify-items-center max-w-5xl mx-auto"
+    : config.gridSize === 9
+      ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
+      : "grid-cols-2 md:grid-cols-3 xl:grid-cols-4";
 
   // Resize Handler
   useEffect(() => {
@@ -597,6 +666,22 @@ const App: React.FC = () => {
                   />
                   <button onClick={() => setConfig({ ...config, zoomLevel: Math.min(3, config.zoomLevel + 0.1) })} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><ZoomIn className="w-3.5 h-3.5" /></button>
                 </div>
+
+                {/* Playback Speed */}
+                <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
+                  <span className="text-xs text-slate-400 font-semibold mr-1">Speed</span>
+                  <select
+                    className="bg-transparent text-xs text-white outline-none cursor-pointer appearance-none font-bold select-none pr-1"
+                    value={config.audio?.playbackSpeed ?? 1}
+                    onChange={(e) => setConfig({ ...config, audio: { ...config.audio, playbackSpeed: parseFloat(e.target.value) } })}
+                  >
+                    <option value="0.5" className="bg-slate-800">0.5x</option>
+                    <option value="0.75" className="bg-slate-800">0.75x</option>
+                    <option value="1" className="bg-slate-800">1x</option>
+                    <option value="1.25" className="bg-slate-800">1.25x</option>
+                    <option value="1.5" className="bg-slate-800">1.5x</option>
+                  </select>
+                </div>
               </>
             )}
           </div>
@@ -675,7 +760,7 @@ const App: React.FC = () => {
                     className={`grid ${gridClass} gap-4 pb-10 origin-top-left transition-all duration-200 ease-out`}
                     style={{ width: `${config.zoomLevel * 100}%` }}
                   >
-                    {currentItems.map((item) => (
+                    {currentItems.map((item, idx) => (
                       <ImageViewer
                         key={item.name}
                         item={item}
@@ -685,6 +770,9 @@ const App: React.FC = () => {
                         onUpdateGt={handleUpdateLabels}
                         audioPlayer={audioPlayer}
                         audioFiles={audioFileMap}
+                        isFocused={focusedItemIndex === idx}
+                        onFocusToggle={() => toggleFocusMode(idx)}
+                        onSetFocus={() => setFocusedItemIndex(idx)}
                       />
                     ))}
                   </div>

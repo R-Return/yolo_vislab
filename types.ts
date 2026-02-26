@@ -45,9 +45,12 @@ export interface VisualizationConfig {
   viewMode: ViewMode;
   editHighlightColor?: string;
   audio?: {
-    minFreq: number;
-    maxFreq: number;
-    highlightColor?: string;
+    minFreq?: number; // Background filter cutoff
+    maxFreq?: number; // Background filter cutoff
+    highlightColor?: string; // Box color when playing
+    clipSec?: number; // How many seconds the image represents
+    strideSec?: number; // How many seconds between images
+    playbackSpeed?: number; // Global playback speed multiplier
   };
   showPredInEditMode?: boolean;
 }
@@ -65,6 +68,7 @@ export interface ImageItem {
   file: File | FileSystemFileHandle;
   gtData?: BoundingBox[];
   predData?: BoundingBox[];
+  isModified?: boolean;
 }
 
 export interface FileCollection {

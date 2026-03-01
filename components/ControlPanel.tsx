@@ -32,6 +32,7 @@ interface ControlPanelProps {
   onToggleEditMode: (enabled: boolean) => void;
   onExportLabels: () => void;
   onLoadAudio: () => void;
+  onImportFolder: () => void;
   hasAudio: boolean;
   isExporting: boolean;
 }
@@ -54,6 +55,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onToggleEditMode,
   onExportLabels,
   onLoadAudio,
+  onImportFolder,
   hasAudio,
   isExporting
 }) => {
@@ -173,9 +175,18 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
       {/* Project Data */}
       <div className="space-y-6 mb-8 mt-2">
-        <h2 className="text-slate-300 font-semibold flex items-center gap-2 border-b border-slate-700 pb-2">
-          <Database className="w-4 h-4" /> Data Sources
-        </h2>
+        <div className="flex items-center justify-between border-b border-slate-700 pb-2">
+          <h2 className="text-slate-300 font-semibold flex items-center gap-2">
+            <Database className="w-4 h-4" /> Data Sources
+          </h2>
+          <button
+            onClick={onImportFolder}
+            className="text-xs flex items-center gap-1 bg-primary/20 text-primary hover:bg-primary/30 px-2 py-1 rounded transition-colors border border-primary/30"
+            title="Import Full Dataset Folder"
+          >
+            <FolderOpen className="w-3 h-3" /> Import Folder
+          </button>
+        </div>
 
         {/* Images */}
         <div className="space-y-1">

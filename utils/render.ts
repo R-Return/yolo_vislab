@@ -162,57 +162,8 @@ export const drawVisualization = async (
   };
 
   // 5. Draw Stats & Capture Hit Regions
-  // Reset Alpha for UI elements
-  ctx.globalAlpha = 1.0;
+  // We no longer draw stats or filename on the canvas.
+  // We return the calculated stats for React to render outside the canvas.
 
-  const statsFontSize = Math.max(10, baseFontSize * 0.8);
-  const statsText = `TP:${stats.tp} FN:${stats.fn} FP:${stats.fp}`;
-  ctx.font = `bold ${statsFontSize}px monospace`;
-  const statsWidth = ctx.measureText(statsText).width + (statsFontSize * 2);
-  const statsHeight = statsFontSize * 1.5;
-
-  const statsX = targetWidth - statsWidth - 10;
-  const statsY = 10;
-
-  ctx.save();
-  ctx.fillStyle = '#000000';
-  ctx.globalAlpha = 0.7;
-  ctx.fillRect(statsX, statsY, statsWidth, statsHeight);
-  ctx.restore();
-
-  const hitRegions: HitRegion[] = [];
-  let currentX = statsX + statsFontSize * 0.5;
-
-  const drawStat = (text: string, color: string, type: BoxType) => {
-    ctx.fillStyle = color;
-    ctx.fillText(text, currentX, statsY + statsFontSize);
-
-    const w = ctx.measureText(text).width;
-    hitRegions.push({
-      type,
-      x: currentX,
-      y: statsY,
-      w: w,
-      h: statsHeight
-    });
-
-    currentX += w + (statsFontSize * 0.5);
-  };
-
-  drawStat(`TP:${stats.tp}`, config.styles.tpPred.color, BoxType.TP_PRED);
-  drawStat(`FN:${stats.fn}`, config.styles.fn.color, BoxType.FN);
-  drawStat(`FP:${stats.fp}`, config.styles.fp.color, BoxType.FP);
-
-  // 6. Draw Filename
-  ctx.save();
-  ctx.fillStyle = '#000000';
-  ctx.globalAlpha = 0.7;
-  const nameWidth = ctx.measureText(item.name).width + (statsFontSize * 2);
-  ctx.fillRect(10, 10, nameWidth, statsHeight);
-  ctx.restore();
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(item.name, 10 + statsFontSize * 0.5, 10 + statsFontSize);
-
-  return { stats, hitRegions, boxes: renderBoxes };
+  return { stats, hitRegions: [], boxes: renderBoxes };
 };

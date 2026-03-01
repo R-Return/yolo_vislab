@@ -40,14 +40,16 @@ const Chart = ({ data, config, type, itemsCount }: { data: PRPoint[], config: Vi
     }
   }
 
+  const clamp = (val: number) => Math.max(0, Math.min(1, val));
+
   const pointsString = data.map(p => {
     if (type === 'pr') {
-      const x = padding + p.recall * chartW;
-      const y = height - padding - p.precision * chartH;
+      const x = padding + clamp(p.recall) * chartW;
+      const y = height - padding - clamp(p.precision) * chartH;
       return `${x},${y}`;
     } else {
-      const x = padding + p.confidence * chartW;
-      const y = height - padding - p.f1 * chartH;
+      const x = padding + clamp(p.confidence) * chartW;
+      const y = height - padding - clamp(p.f1) * chartH;
       return `${x},${y}`;
     }
   }).join(' ');
@@ -163,8 +165,8 @@ const Chart = ({ data, config, type, itemsCount }: { data: PRPoint[], config: Vi
 
             {/* Data Points (Hoverable) */}
             {data.map((p, i) => {
-              const cx = padding + (type === 'pr' ? p.recall : p.confidence) * chartW;
-              const cy = height - padding - (type === 'pr' ? p.precision : p.f1) * chartH;
+              const cx = padding + clamp(type === 'pr' ? p.recall : p.confidence) * chartW;
+              const cy = height - padding - clamp(type === 'pr' ? p.precision : p.f1) * chartH;
               return (
                 <circle
                   key={i}

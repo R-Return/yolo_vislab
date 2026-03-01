@@ -13,6 +13,8 @@ interface ImageViewerProps {
   onUpdateGt?: (fileName: string, newBoxes: BoundingBox[]) => void;
   audioPlayer?: any; // Avoiding circular dependency if possible, or use type
   audioFiles?: Record<string, File | FileSystemFileHandle>;
+  activePlayback?: { id: number; fileName: string } | null;
+  onSetGlobalPlayback?: (pb: { id: number; fileName: string } | null) => void;
   isFocused?: boolean;
   onFocusToggle?: () => void;
   onSetFocus?: () => void;
@@ -30,9 +32,10 @@ interface DragState {
   potentialSelect?: number;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles, isFocused, onFocusToggle, onSetFocus }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles, activePlayback, onSetGlobalPlayback, isFocused, onFocusToggle, onSetFocus }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const playbackIdRef = useRef<number>(0);
 
   // Local GT state for smooth editing
   const [localGtBoxes, setLocalGtBoxes] = useState<BoundingBox[]>(item.gtData || []);
@@ -43,6 +46,30 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const [playhead, setPlayhead] = useState<number | null>(null); // 0 to 1 progress
   const [tempAudioBox, setTempAudioBox] = useState<BoundingBox | null>(null);
   const [contextPredBox, setContextPredBox] = useState<BoundingBox | null>(null);
+  const localPlaybackIdRef = useRef<number>(0);
+  const activePlaybackRef = useRef(activePlayback);
+
+  // Sync ref with prop
+  useEffect(() => {
+    activePlaybackRef.current = activePlayback;
+  }, [activePlayback]);
+
+  // Sync with global playback
+  useEffect(() => {
+    if (activePlayback && activePlayback.fileName === item.name) {
+      if (activePlayback.id !== localPlaybackIdRef.current) {
+        // Someone else started playing our file, or we started playing but this effect triggered?
+        // Actually, if it's OUR file and a NEW ID, it means we should stop any OLD local playback.
+        // But if it's NOT our file, we definitely stop.
+      }
+    } else if (activePlayback) {
+      // Something else is playing, clear our highlight
+      setPlayingBox(null);
+      setPlayhead(null);
+      playbackIdRef.current += 1; // STOP STALE ANIMATIONS
+      localPlaybackIdRef.current = -1; // Invalidate local
+    }
+  }, [activePlayback, item.name]);
 
   // Cache the processed data
   const [cachedData, setCachedData] = useState<{
@@ -56,6 +83,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const [downloading, setDownloading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [hoveredStat, setHoveredStat] = useState<BoxType | null>(null);
+
+  // Stats computed from drawn boxes
+  const [computedStats, setComputedStats] = useState({ tp: 0, fp: 0, fn: 0 });
+
+  // Grid Label Highlight State
+  const [lockedStat, setLockedStat] = useState<BoxType | null>(null);
 
   // Crosshairs State
   const [hoverCoords, setHoverCoords] = useState<{ x: number, y: number, timePx: number, freqHz: number } | null>(null);
@@ -117,9 +150,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
         const renderBoxes = calculateMatches(currentGt, currentPred, config);
 
+        const activeHighlightType = lockedStat || hoveredStat || externalHighlight;
+
         const result = await drawVisualization(ctx, item, config, img.naturalWidth, img.naturalHeight, img, {
           preCalculatedBoxes: renderBoxes,
-          highlightType: hoveredStat || externalHighlight
+          highlightType: activeHighlightType
         });
 
         // Store transform info for mouse mapping
@@ -131,6 +166,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
           hitRegions: result.hitRegions,
           transform
         });
+
+        // Update local computed stats for DOM rendering
+        setComputedStats(result.stats);
 
         // Draw Editor Overlay
         if (isEditMode) {
@@ -159,7 +197,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     render();
 
     return () => { active = false; };
-  }, [item, config, localGtBoxes, isEditMode, hoveredStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
+  }, [item, config, localGtBoxes, isEditMode, hoveredStat, lockedStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
 
   // Global Deletion Listener
   useEffect(() => {
@@ -376,6 +414,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         startY: coords.y,
         initialBox: hit ? { ...hit } : undefined
       });
+      // Stop previous playing audio / clear temp box when starting to draw a new one
+      audioPlayer?.stop();
+      setPlayingBox(null);
+      setPlayhead(null);
+      playbackIdRef.current += 1;
       setTempAudioBox({ classId: 0, x: coords.x, y: coords.y, w: 0, h: 0, confidence: 1 });
       return;
     }
@@ -826,28 +869,35 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       freqBottom = maxF - (boxBottomY * (maxF - minF)); // Lower Freq
     }
 
+    const actualBox = fullBand ? { ...box, y: 0.5, h: 1.0 } : box;
+
     // Set Playing Highlight Bounds
-    if (fullBand) {
-      setPlayingBox({ ...box, y: 0.5, h: 1.0 });
-    } else {
-      setPlayingBox(box);
-    }
+    setPlayingBox(actualBox);
 
     setHidePlayingBorder(hideBorder || false);
     setPlayhead(0);
     setTempAudioBox(null);
 
     // Playhead Animation
+    playbackIdRef.current += 1;
+    const currentPlaybackId = playbackIdRef.current;
+
     let lastTime = performance.now();
     let accumulatedTime = 0;
 
     // Clear highlight immediately before timeout to prevent 1-frame flashes
     const finishPlayback = () => {
+      if (playbackIdRef.current !== currentPlaybackId) return;
       setPlayhead(null);
-      setPlayingBox((prev) => (prev === box ? null : prev));
+      setPlayingBox(null);
+      if (activePlaybackRef.current?.id === currentPlaybackId) {
+        onSetGlobalPlayback?.(null);
+      }
     };
 
     const animate = (now: number) => {
+      if (playbackIdRef.current !== currentPlaybackId) return; // Abort stale loop
+
       const dt = now - lastTime;
       lastTime = now;
 
@@ -857,12 +907,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
       const progress = Math.min(accumulatedTime / (duration / playbackSpeed), 1);
 
-      // Stop animating if playingBox changed externally
-      setPlayingBox((currentBox) => {
-        if (currentBox !== box) return currentBox;
-        setPlayhead(progress);
-        return currentBox;
-      });
+      setPlayhead(progress);
 
       if (progress < 1) {
         requestAnimationFrame(animate);
@@ -871,6 +916,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       }
     };
     requestAnimationFrame(animate);
+
+    // Notify global state
+    localPlaybackIdRef.current = currentPlaybackId;
+    onSetGlobalPlayback?.({ id: currentPlaybackId, fileName: item.name });
+
+    // Fallback cleanup
+    setTimeout(() => {
+      finishPlayback();
+    }, (duration / playbackSpeed) * 1000 + 100);
 
     await audioPlayer.playSubRegion({
       startTimeMs: startTime,
@@ -949,8 +1003,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
   return (
     <div
-      ref={containerRef}
-      className={`relative bg-slate-900 rounded-lg overflow-hidden border ${isFocused ? 'border-primary ring-2 ring-primary/50' : 'border-slate-700'} ${aspectClass} flex items-center justify-center w-full focus:outline-none transition-all cursor-pointer pt-2 pr-2 pb-6 pl-10`}
+      className={`relative bg-slate-900 rounded-lg overflow-hidden border ${isFocused ? 'border-primary ring-2 ring-primary/50' : 'border-slate-700'} ${aspectClass} flex flex-col w-full focus:outline-none transition-all cursor-pointer`}
       onContextMenu={handleContextMenu}
       onClick={onSetFocus}
       onDoubleClick={onFocusToggle}
@@ -963,6 +1016,69 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         }
       }}
     >
+      {/* Header Bar */}
+      <div className="flex justify-between items-center w-full bg-slate-800/80 px-2 py-1 shrink-0 border-b border-slate-700 z-20 h-7 transition-all">
+        <div className="text-[10px] font-mono font-bold text-slate-300 truncate max-w-[50%]">
+          {item.name}
+        </div>
+        <div className="flex gap-2 text-[10px] font-mono font-bold">
+          <span
+            onMouseEnter={() => !lockedStat && setHoveredStat(BoxType.TP_PRED)}
+            onMouseLeave={() => !lockedStat && setHoveredStat(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (lockedStat === BoxType.TP_PRED) {
+                setLockedStat(null);
+                setHoveredStat(null);
+              } else {
+                setLockedStat(BoxType.TP_PRED);
+                setHoveredStat(BoxType.TP_PRED);
+              }
+            }}
+            className={`cursor-pointer px-1.5 py-0.5 rounded transition-all select-none ${lockedStat === BoxType.TP_PRED ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
+            style={{ color: config.styles.tpPred.color }}
+          >
+            TP:{computedStats.tp}
+          </span>
+          <span
+            onMouseEnter={() => !lockedStat && setHoveredStat(BoxType.FN)}
+            onMouseLeave={() => !lockedStat && setHoveredStat(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (lockedStat === BoxType.FN) {
+                setLockedStat(null);
+                setHoveredStat(null);
+              } else {
+                setLockedStat(BoxType.FN);
+                setHoveredStat(BoxType.FN);
+              }
+            }}
+            className={`cursor-pointer px-1.5 py-0.5 rounded transition-all select-none ${lockedStat === BoxType.FN ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
+            style={{ color: config.styles.fn.color }}
+          >
+            FN:{computedStats.fn}
+          </span>
+          <span
+            onMouseEnter={() => !lockedStat && setHoveredStat(BoxType.FP)}
+            onMouseLeave={() => !lockedStat && setHoveredStat(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (lockedStat === BoxType.FP) {
+                setLockedStat(null);
+                setHoveredStat(null);
+              } else {
+                setLockedStat(BoxType.FP);
+                setHoveredStat(BoxType.FP);
+              }
+            }}
+            className={`cursor-pointer px-1.5 py-0.5 rounded transition-all select-none ${lockedStat === BoxType.FP ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
+            style={{ color: config.styles.fp.color }}
+          >
+            FP:{computedStats.fp}
+          </span>
+        </div>
+      </div>
+
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -976,38 +1092,41 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         </div>
       )}
 
-      <canvas
-        ref={canvasRef}
-        className={`max-w-full max-h-full object-contain ${isEditMode ? 'cursor-default' : 'cursor-crosshair'}`}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeaveCanvas}
-      />
+      {/* Canvas container */}
+      <div className="relative flex-1 flex items-center justify-center min-h-0 min-w-0" ref={containerRef}>
+        <canvas
+          ref={canvasRef}
+          className={`max-w-full max-h-full object-contain ${isEditMode ? 'cursor-default' : 'cursor-crosshair'}`}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeaveCanvas}
+        />
 
-      {/* Crosshairs & Tooltip */}
-      {hoverCoords && !isEditMode && (
-        <>
-          <div className="absolute top-0 bottom-0 border-l border-white/40 border-dashed pointer-events-none z-10" style={{ left: hoverCoords.x }} />
-          <div className="absolute left-0 right-0 border-t border-white/40 border-dashed pointer-events-none z-10" style={{ top: hoverCoords.y }} />
+        {/* Crosshairs & Tooltip */}
+        {hoverCoords && !isEditMode && (
+          <>
+            <div className="absolute top-0 bottom-0 border-l border-white/40 border-dashed pointer-events-none z-10" style={{ left: hoverCoords.x }} />
+            <div className="absolute left-0 right-0 border-t border-white/40 border-dashed pointer-events-none z-10" style={{ top: hoverCoords.y }} />
 
-          {/* Freq at left edge */}
-          <div
-            className="absolute left-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-y-1/2"
-            style={{ top: hoverCoords.y }}
-          >
-            {Math.round(hoverCoords.freqHz)}Hz
-          </div>
+            {/* Freq at left edge */}
+            <div
+              className="absolute left-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-y-1/2"
+              style={{ top: hoverCoords.y }}
+            >
+              {Math.round(hoverCoords.freqHz)}Hz
+            </div>
 
-          {/* Time at bottom edge */}
-          <div
-            className="absolute bottom-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-x-1/2"
-            style={{ left: hoverCoords.x }}
-          >
-            {hoverCoords.timePx.toFixed(2)}s
-          </div>
-        </>
-      )}
+            {/* Time at bottom edge */}
+            <div
+              className="absolute bottom-1 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow pointer-events-none z-20 border border-slate-600 font-mono -translate-x-1/2"
+              style={{ left: hoverCoords.x }}
+            >
+              {hoverCoords.timePx.toFixed(2)}s
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Context Menu */}
       {contextMenu && (

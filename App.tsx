@@ -59,6 +59,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [activePlayback, setActivePlayback] = useState<{ id: number; fileName: string } | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
 
@@ -234,6 +235,92 @@ const App: React.FC = () => {
       updateProject({ audioPath: dirHandle.name });
     } catch (err) {
       console.error("Failed to load audio folder", err);
+    }
+  };
+
+  const handleImportFolder = async () => {
+    try {
+      // @ts-ignore
+      const dirHandle = await window.showDirectoryPicker();
+
+      let imgMap: FileMap = {};
+      let gtMap: FileMap = {};
+      let predMap: FileMap = {};
+      let audioMap: FileMap = {};
+
+      let hasImages = false;
+      let hasGt = false;
+      let hasPred = false;
+      let hasAudio = false;
+
+      // @ts-ignore
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'directory') {
+          if (entry.name === 'images') {
+            hasImages = true;
+            // @ts-ignore
+            for await (const file of entry.values()) {
+              if (file.kind === 'file' && !file.name.startsWith('.')) {
+                imgMap[file.name] = file;
+              }
+            }
+          } else if (entry.name === 'labels') {
+            hasGt = true;
+            // @ts-ignore
+            for await (const file of entry.values()) {
+              if (file.kind === 'file' && !file.name.startsWith('.')) {
+                gtMap[file.name] = file;
+              }
+            }
+          } else if (entry.name === 'predictions') {
+            hasPred = true;
+            // @ts-ignore
+            for await (const file of entry.values()) {
+              if (file.kind === 'file' && !file.name.startsWith('.')) {
+                predMap[file.name] = file;
+              }
+            }
+          } else if (entry.name === 'audio') {
+            hasAudio = true;
+            // @ts-ignore
+            for await (const file of entry.values()) {
+              if (file.kind === 'file' && !file.name.startsWith('.')) {
+                const ext = file.name.split('.').pop()?.toLowerCase();
+                if (['wav', 'mp3', 'ogg', 'm4a'].includes(ext || '')) {
+                  audioMap[file.name] = file;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (hasImages) {
+        const collId = generateId();
+        setCollections(prev => [...prev, { id: collId, name: 'Images', type: 'images', files: imgMap, count: Object.keys(imgMap).length }]);
+        updateProject({ imageCollectionId: collId, imagePath: `${dirHandle.name}/images` });
+        setCurrentPage(0);
+      }
+
+      if (hasGt) {
+        const labelMap = await preloadLabels(gtMap);
+        const collId = generateId();
+        setCollections(prev => [...prev, { id: collId, name: 'Labels', type: 'labels', files: gtMap, labels: labelMap, count: Object.keys(gtMap).length }]);
+        updateProject({ gtCollectionId: collId, gtPath: `${dirHandle.name}/labels` });
+      }
+
+      if (hasPred) {
+        const labelMap = await preloadLabels(predMap);
+        updateProject({ predLabels: labelMap, predPath: `${dirHandle.name}/predictions` });
+      }
+
+      if (hasAudio) {
+        setAudioFileMap(audioMap);
+        updateProject({ audioPath: `${dirHandle.name}/audio` });
+      }
+
+    } catch (err) {
+      console.error("Failed to import folder", err);
     }
   };
 
@@ -569,6 +656,7 @@ const App: React.FC = () => {
         onToggleEditMode={setIsEditMode}
         onExportLabels={handleExportLabels}
         onLoadAudio={handleLoadAudio}
+        onImportFolder={handleImportFolder}
         hasAudio={Object.keys(audioFileMap).length > 0}
         isExporting={isExporting}
       />
@@ -770,6 +858,8 @@ const App: React.FC = () => {
                         onUpdateGt={handleUpdateLabels}
                         audioPlayer={audioPlayer}
                         audioFiles={audioFileMap}
+                        activePlayback={activePlayback}
+                        onSetGlobalPlayback={setActivePlayback}
                         isFocused={focusedItemIndex === idx}
                         onFocusToggle={() => toggleFocusMode(idx)}
                         onSetFocus={() => setFocusedItemIndex(idx)}

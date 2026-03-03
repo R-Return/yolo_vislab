@@ -53,6 +53,7 @@ export interface VisualizationConfig {
     playbackSpeed?: number; // Global playback speed multiplier
   };
   showPredInEditMode?: boolean;
+  showLabels?: boolean;
 }
 
 export interface FileMap {

@@ -95,7 +95,7 @@ export const drawVisualization = async (
         // If highlighting TP, also show matched GTs fully
         alpha = 1.0;
       } else {
-        alpha = 0.15; // Dimmed
+        alpha = 0.0; // Vanish completely
       }
     }
 
@@ -122,32 +122,37 @@ export const drawVisualization = async (
     ctx.setLineDash([]);
 
     // Draw Labels
-    let label = '';
-    if (box.type === BoxType.FN) {
-      label = `GT ${box.classId}`;
-    } else if (box.type === BoxType.TP_GT) {
-      label = `GT ${box.classId}`;
-    } else {
-      const conf = box.confidence !== undefined ? box.confidence.toFixed(2) : '1.00';
-      label = `${box.type.replace('_PRED', '')} ${conf}`;
+    if (config.showLabels !== false) {
+      let label = '';
+      if (box.type === BoxType.FN) {
+        label = `GT ${box.classId}`;
+      } else if (box.type === BoxType.TP_GT) {
+        label = `GT ${box.classId}`;
+      } else {
+        const conf = box.confidence !== undefined ? box.confidence.toFixed(2) : '1.00';
+        label = `${box.type.replace('_PRED', '')} ${conf}`;
+      }
+
+      const padding = Math.max(2, baseFontSize * 0.2);
+
+      ctx.save();
+      ctx.font = `bold ${baseFontSize}px sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.lineJoin = 'round';
+
+      ctx.lineWidth = Math.max(2, baseFontSize * 0.2);
+      ctx.strokeStyle = '#000000';
+      ctx.strokeText(label, x + padding, y + padding);
+
+      ctx.fillStyle = box.color;
+      ctx.fillText(label, x + padding, y + padding);
+
+      ctx.restore();
     }
-
-    const padding = Math.max(2, baseFontSize * 0.2);
-
-    ctx.save();
-    ctx.font = `bold ${baseFontSize}px sans-serif`;
-    ctx.textBaseline = 'top';
-    ctx.lineJoin = 'round';
-
-    ctx.lineWidth = Math.max(2, baseFontSize * 0.2);
-    ctx.strokeStyle = '#000000';
-    ctx.strokeText(label, x + padding, y + padding);
-
-    ctx.fillStyle = box.color;
-    ctx.fillText(label, x + padding, y + padding);
-
-    ctx.restore();
   });
+
+  // Reset alpha for any subsequent layers (like UI overlays and playheads)
+  ctx.globalAlpha = 1.0;
 
   // Clean up if we created the image locally
   if (!img) {

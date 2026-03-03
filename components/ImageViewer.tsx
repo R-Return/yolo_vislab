@@ -18,6 +18,7 @@ interface ImageViewerProps {
   isFocused?: boolean;
   onFocusToggle?: () => void;
   onSetFocus?: () => void;
+  onRecoverOriginalGt?: (fileName: string) => void;
 }
 
 interface DragState {
@@ -32,7 +33,7 @@ interface DragState {
   potentialSelect?: number;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles, activePlayback, onSetGlobalPlayback, isFocused, onFocusToggle, onSetFocus }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlight, isEditMode, onUpdateGt, audioPlayer, audioFiles, activePlayback, onSetGlobalPlayback, isFocused, onFocusToggle, onSetFocus, onRecoverOriginalGt }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const playbackIdRef = useRef<number>(0);
@@ -197,7 +198,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     render();
 
     return () => { active = false; };
-  }, [item, config, localGtBoxes, isEditMode, hoveredStat, lockedStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
+  }, [item, config, config.ioMinThreshold, config.confThreshold, config.showLabels, localGtBoxes, isEditMode, hoveredStat, lockedStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
 
   // Global Deletion Listener
   useEffect(() => {
@@ -819,8 +820,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         setContextPredBox(hitPredBox);
         setContextMenu({ x: e.clientX, y: e.clientY });
       } else {
-        setContextMenu(null);
+        setSelectedBoxIdx(null);
         setContextPredBox(null);
+        setContextMenu({ x: e.clientX, y: e.clientY });
       }
       return;
     }
@@ -882,9 +884,6 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     playbackIdRef.current += 1;
     const currentPlaybackId = playbackIdRef.current;
 
-    let lastTime = performance.now();
-    let accumulatedTime = 0;
-
     // Clear highlight immediately before timeout to prevent 1-frame flashes
     const finishPlayback = () => {
       if (playbackIdRef.current !== currentPlaybackId) return;
@@ -894,6 +893,24 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         onSetGlobalPlayback?.(null);
       }
     };
+
+    // Prepare to play
+    // Notify global state
+    localPlaybackIdRef.current = currentPlaybackId;
+    onSetGlobalPlayback?.({ id: currentPlaybackId, fileName: item.name });
+
+    // Wait for playback to actually start (buffering finished)
+    await audioPlayer.playSubRegion({
+      startTimeMs: startTime,
+      durationMs: duration,
+      minFreq: Math.min(freqTop, freqBottom),
+      maxFreq: Math.max(freqTop, freqBottom),
+      playbackSpeed: playbackSpeed
+    });
+
+    // Playhead Animation (Starts when audio starts playing)
+    let lastTime = performance.now();
+    let accumulatedTime = 0;
 
     const animate = (now: number) => {
       if (playbackIdRef.current !== currentPlaybackId) return; // Abort stale loop
@@ -917,22 +934,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     };
     requestAnimationFrame(animate);
 
-    // Notify global state
-    localPlaybackIdRef.current = currentPlaybackId;
-    onSetGlobalPlayback?.({ id: currentPlaybackId, fileName: item.name });
-
     // Fallback cleanup
     setTimeout(() => {
       finishPlayback();
     }, (duration / playbackSpeed) * 1000 + 100);
-
-    await audioPlayer.playSubRegion({
-      startTimeMs: startTime,
-      durationMs: duration,
-      minFreq: Math.min(freqTop, freqBottom),
-      maxFreq: Math.max(freqTop, freqBottom),
-      playbackSpeed: playbackSpeed
-    });
 
     setContextMenu(null);
   };
@@ -1186,6 +1191,30 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
                 <Copy className="w-3 h-3" />
                 Copy Filename
               </button>
+              {/* GT Operations */}
+              <button
+                onClick={() => {
+                  setLocalGtBoxes([]);
+                  onUpdateGt?.(item.name, []);
+                  setContextMenu(null);
+                }}
+                className="text-left px-4 py-2 text-xs text-red-500 hover:bg-slate-700 hover:text-red-400 flex items-center gap-2 transition-colors w-full border-t border-slate-700 mt-1 pt-2"
+              >
+                <Trash2 className="w-3 h-3" />
+                Delete All GTs
+              </button>
+              {onRecoverOriginalGt && (
+                <button
+                  onClick={() => {
+                    onRecoverOriginalGt(item.name);
+                    setContextMenu(null);
+                  }}
+                  className="text-left px-4 py-2 text-xs text-blue-400 hover:bg-slate-700 hover:text-blue-300 flex items-center gap-2 transition-colors w-full"
+                >
+                  <Copy className="w-3 h-3" />
+                  Recover original GTs
+                </button>
+              )}
             </>
           ) : (
             <>

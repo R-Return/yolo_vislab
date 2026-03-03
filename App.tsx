@@ -36,7 +36,8 @@ const DEFAULT_CONFIG: VisualizationConfig = {
     playbackSpeed: 1.0
   },
   editHighlightColor: '#fbbf24', // Amber/Yellow default
-  showPredInEditMode: false
+  showPredInEditMode: false,
+  showLabels: true
 };
 
 const generateId = () => {
@@ -191,6 +192,28 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleRecoverOriginalGt = async (fileName: string) => {
+    if (!activeProject.gtCollectionId) return;
+    const baseName = fileName.substring(0, fileName.lastIndexOf('.'));
+    const txtName = `${baseName}.txt`;
+    const collection = collections.find(c => c.id === activeProject.gtCollectionId);
+    if (!collection || !collection.files[txtName]) return;
+
+    try {
+      const file = collection.files[txtName];
+      const originalBoxes = await parseYoloFile(file);
+      handleUpdateLabels(fileName, originalBoxes);
+
+      setModifiedFiles(prev => {
+        const next = new Set(prev);
+        next.delete(txtName);
+        return next;
+      });
+    } catch (e) {
+      console.error("Failed to recover original GT", e);
+    }
+  };
+
   const handleExportLabels = async () => {
     if (!activeProject.gtCollectionId || modifiedFiles.size === 0) {
       alert("No modifications to export.");
@@ -209,7 +232,7 @@ const App: React.FC = () => {
         }
       });
 
-      await exportLabels(filteredLabels, `${collection.name}_modified.zip`);
+      await exportLabels(filteredLabels);
     } catch (err) {
       console.error("Export failed", err);
     } finally {
@@ -863,6 +886,7 @@ const App: React.FC = () => {
                         isFocused={focusedItemIndex === idx}
                         onFocusToggle={() => toggleFocusMode(idx)}
                         onSetFocus={() => setFocusedItemIndex(idx)}
+                        onRecoverOriginalGt={handleRecoverOriginalGt}
                       />
                     ))}
                   </div>

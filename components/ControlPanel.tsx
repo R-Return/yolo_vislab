@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, LayoutGrid, Maximize, Square, RectangleHorizontal, Download, Music, Loader2, Palette, Layout } from 'lucide-react';
 import { VisualizationConfig, Project, FileCollection, BoxStyle } from '../types';
 
@@ -334,8 +335,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       </div>
 
       {/* Settings Modal */}
-      {isSettingsOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      {isSettingsOpen && createPortal(
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center">
               <h3 className="font-bold text-slate-200 flex items-center gap-2">
@@ -348,6 +349,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               {/* Visuals */}
               <section className="space-y-4">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Visual Style</h4>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={config.showLabels ?? true}
+                    onChange={(e) => onConfigChange({ ...config, showLabels: e.target.checked })}
+                    className="rounded bg-slate-800 border-slate-700 text-primary"
+                  />
+                  <label className="text-slate-300 text-sm">Show Box Labels</label>
+                </div>
                 <div>
                   <div className="flex justify-between mb-1"><label className="text-slate-300 text-sm">Line Width</label><span className="text-xs text-primary">{config.lineWidth}px</span></div>
                   <input type="range" min="1" max="10" step="1" value={config.lineWidth} onChange={(e) => onConfigChange({ ...config, lineWidth: parseInt(e.target.value) })} className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary" />
@@ -389,7 +399,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div >
   );

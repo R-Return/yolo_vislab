@@ -176,7 +176,7 @@ export class AudioPlayer {
 
         try {
             await this.audioElement.play();
-
+            // Start timer ONLY after audio has actually started playing
             this.stopTimeout = setTimeout(() => {
                 this.audioElement?.pause();
             }, (durationSeconds / playbackSpeed) * 1000);

@@ -147,7 +147,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         // Filter out Predictions if in Edit Mode to reduce clutter (Requested Feature)
         // Except if showPredInEditMode is enabled
         const currentGt = isEditMode ? localGtBoxes : (item.gtData || []);
-        const currentPred = (isEditMode && !config.showPredInEditMode) ? [] : (item.predData || []);
+        const currentPred = (isEditMode && config.showPredictions === false) ? [] : (item.predData || []);
 
         const renderBoxes = calculateMatches(currentGt, currentPred, config);
 
@@ -834,7 +834,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     }
 
     // Perform hit detection for Prediction (smallest area)
-    if (config.showPredInEditMode && cachedData) {
+    if (config.showPredictions !== false && cachedData) {
       for (const b of cachedData.boxes) {
         if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
           const bx1 = b.x - b.w / 2;

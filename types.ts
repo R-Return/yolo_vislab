@@ -52,7 +52,6 @@ export interface VisualizationConfig {
     strideSec?: number; // How many seconds between images
     playbackSpeed?: number; // Global playback speed multiplier
   };
-  showPredInEditMode?: boolean;
   showLabels?: boolean;
   showPredictions?: boolean;
 }

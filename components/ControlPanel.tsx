@@ -230,18 +230,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   {isExporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
                 </button>
               </div>
-
-              {isEditMode && (
-                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer pl-1">
-                  <input
-                    type="checkbox"
-                    checked={config.showPredInEditMode ?? false}
-                    onChange={(e) => onConfigChange({ ...config, showPredInEditMode: e.target.checked })}
-                    className="rounded bg-slate-700 border-slate-600 text-primary"
-                  />
-                  Show Predictions
-                </label>
-              )}
             </div>
           )}
         </div>

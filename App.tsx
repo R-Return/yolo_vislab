@@ -36,7 +36,6 @@ const DEFAULT_CONFIG: VisualizationConfig = {
     playbackSpeed: 1.0
   },
   editHighlightColor: '#fbbf24', // Amber/Yellow default
-  showPredInEditMode: false,
   showLabels: false,
   showPredictions: true
 };

@@ -248,7 +248,20 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
         {/* Pred Labels */}
         <div className="space-y-1">
-          <label className="text-slate-400 text-xs block">Predictions</label>
+          <div className="flex items-center justify-between">
+            <label className="text-slate-400 text-xs block">Predictions</label>
+            {stats.hasPred && (
+              <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={config.showPredictions ?? true}
+                  onChange={(e) => onConfigChange({ ...config, showPredictions: e.target.checked })}
+                  className="rounded bg-slate-700 border-slate-600 text-primary w-3 h-3"
+                />
+                Show Boxes
+              </label>
+            )}
+          </div>
           <button
             onClick={onLoadPred}
             className={`w-full py-2 px-3 rounded flex items-center justify-center gap-2 transition-colors text-xs border border-dashed ${stats.hasPred ? 'bg-amber-500/20 border-amber-500 text-amber-500' : 'bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600'}`}

@@ -15,6 +15,7 @@ export interface AudioPlayOptions {
     minFreq?: number;
     maxFreq?: number;
     playbackSpeed?: number;
+    onFinish?: () => void;
 }
 
 /**
@@ -59,6 +60,7 @@ export class AudioPlayer {
     private currentObjectUrl: string | null = null;
     private stopTimeout: any = null;
     private playbackEndTime: number | null = null;
+    private currentOnFinish: (() => void) | null = null;
 
     constructor() {
         this.context = getAudioContext();
@@ -95,6 +97,7 @@ export class AudioPlayer {
             this.stopTimeout = null;
         }
         this.playbackEndTime = null;
+        this.currentOnFinish = null;
         if (this.audioSource) {
             try { this.audioSource.disconnect(); } catch (e) { }
         }
@@ -109,9 +112,11 @@ export class AudioPlayer {
                 if (remainingMs > 0) {
                     this.stopTimeout = setTimeout(() => {
                         this.audioElement?.pause();
+                        if (this.currentOnFinish) this.currentOnFinish();
                     }, remainingMs);
                 } else {
                     this.audioElement.pause();
+                    if (this.currentOnFinish) this.currentOnFinish();
                 }
             }
         } else {
@@ -173,12 +178,14 @@ export class AudioPlayer {
         this.audioElement.currentTime = offsetSeconds;
         this.audioElement.playbackRate = playbackSpeed;
         this.playbackEndTime = offsetSeconds + durationSeconds;
+        this.currentOnFinish = options.onFinish || null;
 
         try {
             await this.audioElement.play();
             // Start timer ONLY after audio has actually started playing
             this.stopTimeout = setTimeout(() => {
                 this.audioElement?.pause();
+                if (this.currentOnFinish) this.currentOnFinish();
             }, (durationSeconds / playbackSpeed) * 1000);
         } catch (e) {
             console.error("Audio playback failed", e);

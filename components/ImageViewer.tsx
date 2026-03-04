@@ -379,13 +379,31 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
   // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left click
+    // We allow right click for audio drag box in edit mode
+    if (e.button !== 0 && !(e.button === 2 && isEditMode)) return;
 
     // Grab focus so keyboard events target this component correctly if using target listeners
     // (Though we moved to document listener, this is still good practice)
     containerRef.current?.focus();
 
     const coords = getImgCoords(e);
+
+    // If it's a right click in edit mode, initiate an audio temp box drag
+    if (isEditMode && e.button === 2) {
+      setDragState({
+        mode: 'create',
+        boxIndex: -2,
+        startX: coords.x,
+        startY: coords.y
+      });
+      // Same logic as non-edit mode temp audio box creation
+      audioPlayer?.stop();
+      setPlayingBox(null);
+      setPlayhead(null);
+      playbackIdRef.current += 1;
+      setTempAudioBox({ classId: 0, x: coords.x, y: coords.y, w: 0, h: 0, confidence: 1 });
+      return;
+    }
     const { width, height } = canvasRef.current!;
 
     if (!isEditMode) {
@@ -519,27 +537,27 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     if (dragState) {
       e.preventDefault();
 
-      if (!isEditMode) {
-        if (dragState.mode === 'create' && dragState.boxIndex === -2) {
-          const startX = dragState.startX;
-          const startY = dragState.startY;
-          const currentX = coords.x;
-          const currentY = coords.y;
+      if (dragState.mode === 'create' && dragState.boxIndex === -2) {
+        const startX = dragState.startX;
+        const startY = dragState.startY;
+        const currentX = coords.x;
+        const currentY = coords.y;
 
-          const minX = Math.min(startX, currentX);
-          const maxX = Math.max(startX, currentX);
-          const minY = Math.min(startY, currentY);
-          const maxY = Math.max(startY, currentY);
+        const minX = Math.min(startX, currentX);
+        const maxX = Math.max(startX, currentX);
+        const minY = Math.min(startY, currentY);
+        const maxY = Math.max(startY, currentY);
 
-          const w = maxX - minX;
-          const h = maxY - minY;
-          const x = minX + w / 2;
-          const y = minY + h / 2;
+        const w = maxX - minX;
+        const h = maxY - minY;
+        const x = minX + w / 2;
+        const y = minY + h / 2;
 
-          setTempAudioBox({ classId: 0, x, y, w, h, confidence: 1 });
-        }
+        setTempAudioBox({ classId: 0, x, y, w, h, confidence: 1 });
         return;
       }
+
+      if (!isEditMode) return;
 
       if (dragState.mode === 'move' && dragState.initialBox) {
         const dx = coords.x - dragState.startX;
@@ -642,12 +660,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (dragState) {
-      if (!isEditMode) {
-        if (dragState.mode === 'create' && dragState.boxIndex === -2 && tempAudioBox) {
-          if (tempAudioBox.w > 0.005 && tempAudioBox.h > 0.005) {
-            playAudioForBox(tempAudioBox, e.shiftKey);
-          } else {
-            // It was a click!
+      if (dragState.mode === 'create' && dragState.boxIndex === -2 && tempAudioBox) {
+        if (tempAudioBox.w > 0.005 && tempAudioBox.h > 0.005) {
+          playAudioForBox(tempAudioBox, e.shiftKey);
+          if (isEditMode) {
+            // Nothing to suppress, just do nothing
+          }
+        } else {
+          // It was a click!
+          if (!isEditMode) {
             if (dragState.initialBox) {
               playAudioForBox(dragState.initialBox, e.shiftKey);
             } else {
@@ -658,9 +679,17 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
               };
               playAudioForBox(fullImageAudioBox, false, true); // Play full image without drawing border
             }
+          } else {
+            // in edit mode, a simple right click should open our custom context menu since we bypassed it earlier
+            openContextMenuInEditMode(e.clientX, e.clientY);
           }
-          setTempAudioBox(null);
         }
+        setTempAudioBox(null);
+        setDragState(null);
+        return;
+      }
+
+      if (!isEditMode) {
         setDragState(null);
         return;
       }
@@ -768,62 +797,79 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     }
   };
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const openContextMenuInEditMode = (clientX: number, clientY: number) => {
+    if (!canvasRef.current || !cachedData) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const scaleX = canvasRef.current.width / rect.width;
+    const scaleY = canvasRef.current.height / rect.height;
 
-    if (isEditMode) {
-      const coords = getImgCoords(e);
-      let hitGt = -1;
-      let hitGtArea = Infinity;
+    const cx = (clientX - rect.left) * scaleX;
+    const cy = (clientY - rect.top) * scaleY;
 
-      let hitPredBox: BoundingBox | null = null;
-      let hitPredArea = Infinity;
+    // Normalized coordinates (0-1)
+    const nx = cx / canvasRef.current.width;
+    const ny = cy / canvasRef.current.height;
 
-      // Perform hit detection for GT (smallest area)
-      for (let i = localGtBoxes.length - 1; i >= 0; i--) {
-        const b = localGtBoxes[i];
-        const bx1 = b.x - b.w / 2;
-        const bx2 = b.x + b.w / 2;
-        const by1 = b.y - b.h / 2;
-        const by2 = b.y + b.h / 2;
+    let hitGt = -1;
+    let hitGtArea = Infinity;
 
-        if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
-          const area = b.w * b.h;
-          if (area < hitGtArea) {
-            hitGtArea = area;
-            hitGt = i;
-          }
+    let hitPredBox: BoundingBox | null = null;
+    let hitPredArea = Infinity;
+
+    // Perform hit detection for GT (smallest area)
+    for (let i = localGtBoxes.length - 1; i >= 0; i--) {
+      const b = localGtBoxes[i];
+      const bx1 = b.x - b.w / 2;
+      const bx2 = b.x + b.w / 2;
+      const by1 = b.y - b.h / 2;
+      const by2 = b.y + b.h / 2;
+
+      if (nx >= bx1 && nx <= bx2 && ny >= by1 && ny <= by2) {
+        const area = b.w * b.h;
+        if (area < hitGtArea) {
+          hitGtArea = area;
+          hitGt = i;
         }
       }
+    }
 
-      // Perform hit detection for Prediction (smallest area)
-      if (config.showPredInEditMode && cachedData) {
-        for (const b of cachedData.boxes) {
-          if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
-            const bx1 = b.x - b.w / 2;
-            const bx2 = b.x + b.w / 2;
-            const by1 = b.y - b.h / 2;
-            const by2 = b.y + b.h / 2;
-            if (coords.x >= bx1 && coords.x <= bx2 && coords.y >= by1 && coords.y <= by2) {
-              const area = b.w * b.h;
-              if (area < hitPredArea) {
-                hitPredArea = area;
-                hitPredBox = b;
-              }
+    // Perform hit detection for Prediction (smallest area)
+    if (config.showPredInEditMode && cachedData) {
+      for (const b of cachedData.boxes) {
+        if (b.type === BoxType.TP_PRED || b.type === BoxType.FP) {
+          const bx1 = b.x - b.w / 2;
+          const bx2 = b.x + b.w / 2;
+          const by1 = b.y - b.h / 2;
+          const by2 = b.y + b.h / 2;
+          if (nx >= bx1 && nx <= bx2 && ny >= by1 && ny <= by2) {
+            const area = b.w * b.h;
+            if (area < hitPredArea) {
+              hitPredArea = area;
+              hitPredBox = b;
             }
           }
         }
       }
+    }
 
-      if (hitGt !== -1 || hitPredBox) {
-        setSelectedBoxIdx(hitGt !== -1 ? hitGt : null);
-        setContextPredBox(hitPredBox);
-        setContextMenu({ x: e.clientX, y: e.clientY });
-      } else {
-        setSelectedBoxIdx(null);
-        setContextPredBox(null);
-        setContextMenu({ x: e.clientX, y: e.clientY });
-      }
+    if (hitGt !== -1 || hitPredBox) {
+      setSelectedBoxIdx(hitGt !== -1 ? hitGt : null);
+      setContextPredBox(hitPredBox);
+    } else {
+      setSelectedBoxIdx(null);
+      setContextPredBox(null);
+    }
+
+    const x = Math.min(clientX, window.innerWidth - 200);
+    const y = Math.min(clientY, window.innerHeight - 80);
+    setContextMenu({ x, y });
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+
+    if (isEditMode) {
+      // In Edit Mode, we handle context menu in handleMouseUp to distinguish click vs audio drag
       return;
     }
 
@@ -905,7 +951,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       durationMs: duration,
       minFreq: Math.min(freqTop, freqBottom),
       maxFreq: Math.max(freqTop, freqBottom),
-      playbackSpeed: playbackSpeed
+      playbackSpeed: playbackSpeed,
+      onFinish: () => {
+        finishPlayback();
+      }
     });
 
     // Playhead Animation (Starts when audio starts playing)
@@ -928,16 +977,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
       if (progress < 1) {
         requestAnimationFrame(animate);
-      } else {
-        finishPlayback();
       }
+      // Note: We don't call finishPlayback() here anymore, we let onFinish handle it
     };
     requestAnimationFrame(animate);
-
-    // Fallback cleanup
-    setTimeout(() => {
-      finishPlayback();
-    }, (duration / playbackSpeed) * 1000 + 100);
 
     setContextMenu(null);
   };

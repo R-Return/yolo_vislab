@@ -54,6 +54,7 @@ export interface VisualizationConfig {
   };
   showPredInEditMode?: boolean;
   showLabels?: boolean;
+  showPredictions?: boolean;
 }
 
 export interface FileMap {

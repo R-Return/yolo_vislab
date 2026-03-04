@@ -88,6 +88,12 @@ export const drawVisualization = async (
   renderBoxes.forEach((box) => {
     // Logic: If highlightType is set, dim everything that doesn't match
     let alpha = 1.0;
+
+    // Skip if we shouldn't show predictions
+    if (config.showPredictions === false && (box.type === BoxType.TP_PRED || box.type === BoxType.FP)) {
+      return;
+    }
+
     if (highlightType) {
       if (box.type === highlightType) {
         alpha = 1.0;

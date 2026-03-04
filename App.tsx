@@ -37,7 +37,8 @@ const DEFAULT_CONFIG: VisualizationConfig = {
   },
   editHighlightColor: '#fbbf24', // Amber/Yellow default
   showPredInEditMode: false,
-  showLabels: true
+  showLabels: false,
+  showPredictions: true
 };
 
 const generateId = () => {
@@ -462,6 +463,17 @@ const App: React.FC = () => {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [config.gridSize, currentItems.length, focusedItemIndex, currentPage]);
+
+  // Exit Prompt for Unsaved Modifications
+  useEffect(() => {
+    if (modifiedFiles.size === 0) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [modifiedFiles.size]);
 
   // Ensure currentPage is always within valid bounds
   useEffect(() => {

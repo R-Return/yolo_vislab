@@ -1071,8 +1071,16 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     >
       {/* Header Bar */}
       <div className="flex justify-between items-center w-full bg-slate-800/80 px-2 py-1 shrink-0 border-b border-slate-700 z-20 h-7 transition-all">
-        <div className="text-[10px] font-mono font-bold text-slate-300 truncate max-w-[50%]">
-          {item.name}
+        <div className="text-[10px] font-mono font-bold text-slate-300 truncate max-w-[60%] flex items-center gap-2">
+          <span className="truncate">{item.name}</span>
+          {showModifiedBadge && (
+            <span className="shrink-0 text-amber-500 border border-amber-500/40 px-1.5 py-0.5 rounded-[2px] text-[8px] leading-none bg-amber-500/5">MOD</span>
+          )}
+          {item.isSaved && !showModifiedBadge && (
+            <span className="shrink-0 text-emerald-500 border border-emerald-500/40 px-1.5 py-0.5 rounded-[2px] text-[8px] leading-none bg-emerald-500/5 flex items-center gap-0.5">
+              <Check className="w-2 h-2" /> SAVED
+            </span>
+          )}
         </div>
         <div className="flex gap-2 text-[10px] font-mono font-bold">
           <span
@@ -1138,12 +1146,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         </div>
       )}
 
-      {/* Modified Indicator */}
-      {showModifiedBadge && (
-        <div className="absolute bottom-0 right-0 bg-amber-500/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-tl z-20 pointer-events-none">
-          MODIFIED
-        </div>
-      )}
+      {/* Modified Indicator removed from here - moved to header */}
 
       {/* Canvas container */}
       <div className="relative flex-1 flex items-center justify-center min-h-0 min-w-0" ref={containerRef}>
@@ -1180,6 +1183,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
           </>
         )}
       </div>
+
+      {/* Saved Badge removed from here - moved to header */}
 
       {/* Context Menu */}
       {contextMenu && (

@@ -6,8 +6,9 @@ import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxTy
 import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle, PanelRight } from 'lucide-react';
 import { drawVisualization } from './utils/render';
 import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
-import { exportLabels } from './utils/export';
+import { exportLabels, exportLabelsAsZip } from './utils/export';
 import { AudioPlayer, getAudioFilename, extractStartTimeFromFilename } from './utils/audio';
+import { saveLabelToDB, getAllSavedLabels, deleteLabelFromDB, clearAllLabelsFromDB } from './utils/db';
 
 // Single Audio Player Instance
 const audioPlayer = new AudioPlayer();
@@ -60,9 +61,12 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ current: number, total: number } | null>(null);
   const [activePlayback, setActivePlayback] = useState<{ id: number; fileName: string } | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
+  const [savedFiles, setSavedFiles] = useState<Set<string>>(new Set());
+  const [allSessionModifiedFiles, setAllSessionModifiedFiles] = useState<Set<string>>(new Set());
 
   // Audio State
   const [audioFileMap, setAudioFileMap] = useState<FileMap>({});
@@ -109,6 +113,48 @@ const App: React.FC = () => {
 
 
   // Direct Data Loading
+  const mergeIndexedDBLabels = async (targetGtId?: string) => {
+    try {
+      const savedInDb = await getAllSavedLabels();
+      if (!savedInDb || savedInDb.length === 0) return;
+
+      const targetId = targetGtId || activeProject.gtCollectionId;
+      if (!targetId) return;
+
+      // Update file state first (outside collections map)
+      const filenames = savedInDb.map((r: any) => r.filename);
+      setModifiedFiles(prev => {
+        const next = new Set(prev);
+        filenames.forEach(f => next.add(f));
+        return next;
+      });
+      setAllSessionModifiedFiles(prev => {
+        const next = new Set(prev);
+        filenames.forEach(f => next.add(f));
+        return next;
+      });
+      setSavedFiles(prev => {
+        const next = new Set(prev);
+        filenames.forEach(f => next.delete(f));
+        return next;
+      });
+
+      // Then update the actual label data in collections
+      setCollections(prev => prev.map(c => {
+        if (c.id === targetId) {
+          const updatedLabels = { ...c.labels };
+          savedInDb.forEach((record: any) => {
+            updatedLabels[record.filename] = record.boxes;
+          });
+          return { ...c, labels: updatedLabels };
+        }
+        return c;
+      }));
+    } catch (e) {
+      console.error("Failed to merge IndexedDB labels", e);
+    }
+  };
+
   const handleLoadImages = async () => {
     try {
       // @ts-ignore
@@ -121,11 +167,11 @@ const App: React.FC = () => {
         }
       }
 
-      // Simplified: We use a special collection or just bind to project
       const collId = generateId();
       setCollections(prev => [...prev, { id: collId, name: dirHandle.name, type: 'images', files: fileMap, count: Object.keys(fileMap).length }]);
       updateProject({ imageCollectionId: collId, imagePath: dirHandle.name });
       setCurrentPage(0);
+      await mergeIndexedDBLabels();
     } catch (err) {
       console.error("Failed to load images", err);
     }
@@ -147,6 +193,7 @@ const App: React.FC = () => {
       const collId = generateId();
       setCollections(prev => [...prev, { id: collId, name: dirHandle.name, type: 'labels', files: fileMap, labels: labelMap, count: Object.keys(fileMap).length }]);
       updateProject({ gtCollectionId: collId, gtPath: dirHandle.name });
+      await mergeIndexedDBLabels(collId);
     } catch (err) {
       console.error("Failed to load GT", err);
     }
@@ -175,7 +222,17 @@ const App: React.FC = () => {
 
     const baseName = fileName.substring(0, fileName.lastIndexOf('.'));
     const txtName = `${baseName}.txt`;
+
     setModifiedFiles(prev => new Set(prev).add(txtName));
+    setAllSessionModifiedFiles(prev => new Set(prev).add(txtName));
+    setSavedFiles(prev => {
+      const next = new Set(prev);
+      next.delete(txtName);
+      return next;
+    });
+
+    // Auto-save to IndexedDB to prevent data loss
+    saveLabelToDB(txtName, newBoxes).catch(e => console.error("Failed to save to IndexedDB", e));
 
     // Update the relevant collection in state
     setCollections(prev => prev.map(c => {
@@ -214,29 +271,61 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExportLabels = async () => {
-    if (!activeProject.gtCollectionId || modifiedFiles.size === 0) {
-      alert("No modifications to export.");
+  const handleExportLabels = async (asZip: boolean = false) => {
+    // Only export files that are modified and not yet saved
+    const filesToExport = Array.from(modifiedFiles).filter(f => !savedFiles.has(f));
+    const zipExportFiles = Array.from(allSessionModifiedFiles); // Export EVERYTHING we touched this session
+
+    if (!activeProject.gtCollectionId || (asZip ? zipExportFiles.length === 0 : filesToExport.length === 0)) {
+      alert("No new modifications to export.");
       return;
     }
     const collection = collections.find(c => c.id === activeProject.gtCollectionId);
     if (!collection || !collection.labels) return;
 
     setIsExporting(true);
+    const targetFiles = asZip ? zipExportFiles : filesToExport;
+    setExportProgress({ current: 0, total: targetFiles.length });
+
     try {
       // Filter labels to only include modified ones
       const filteredLabels: LabelMap = {};
-      modifiedFiles.forEach(name => {
-        if (collection.labels![name]) {
-          filteredLabels[name] = collection.labels![name];
+      targetFiles.forEach((name: string) => {
+        if (collection.labels && collection.labels[name]) {
+          filteredLabels[name] = collection.labels[name];
         }
       });
 
-      await exportLabels(filteredLabels);
+      if (asZip) {
+        await exportLabelsAsZip(filteredLabels, (current, total) => setExportProgress({ current, total }));
+      } else {
+        await exportLabels(filteredLabels, (current, total) => setExportProgress({ current, total }));
+
+        // Remove successfully exported files from IndexedDB cache
+        await Promise.all(filesToExport.map(f => deleteLabelFromDB(f as string)));
+
+        // Mark all exported files as saved
+        setSavedFiles(prev => {
+          const next = new Set(prev);
+          filesToExport.forEach(f => next.add(f));
+          return next;
+        });
+        // Clear them from modified list to remove the visual badge
+        setModifiedFiles(prev => {
+          const next = new Set(prev);
+          filesToExport.forEach(f => next.delete(f));
+          return next;
+        });
+      }
     } catch (err) {
       console.error("Export failed", err);
+      // Give a small hint about zip fallback if dir picker failed
+      if (!asZip) {
+        alert("Directory export failed or was cancelled. Try 'Export as Zip' as a fallback.");
+      }
     } finally {
       setIsExporting(false);
+      setExportProgress(null);
     }
   };
 
@@ -325,11 +414,12 @@ const App: React.FC = () => {
         setCurrentPage(0);
       }
 
+      let gtCollId: string | null = null;
       if (hasGt) {
         const labelMap = await preloadLabels(gtMap);
-        const collId = generateId();
-        setCollections(prev => [...prev, { id: collId, name: 'Labels', type: 'labels', files: gtMap, labels: labelMap, count: Object.keys(gtMap).length }]);
-        updateProject({ gtCollectionId: collId, gtPath: `${dirHandle.name}/labels` });
+        gtCollId = generateId();
+        setCollections(prev => [...prev, { id: gtCollId, name: 'Labels', type: 'labels', files: gtMap, labels: labelMap, count: Object.keys(gtMap).length }]);
+        updateProject({ gtCollectionId: gtCollId, gtPath: `${dirHandle.name}/labels` });
       }
 
       if (hasPred) {
@@ -342,6 +432,11 @@ const App: React.FC = () => {
         updateProject({ audioPath: `${dirHandle.name}/audio` });
       }
 
+      if (gtCollId) {
+        await mergeIndexedDBLabels(gtCollId);
+      } else {
+        await mergeIndexedDBLabels();
+      }
     } catch (err) {
       console.error("Failed to import folder", err);
     }
@@ -376,9 +471,10 @@ const App: React.FC = () => {
         gtData: gtLabels[txtName],
         predData: predLabels[txtName],
         isModified: modifiedFiles.has(txtName),
+        isSaved: savedFiles.has(txtName),
       };
     });
-  }, [imageFiles, gtLabels, predLabels, modifiedFiles]);
+  }, [imageFiles, gtLabels, predLabels, modifiedFiles, savedFiles]);
 
   // Pagination Logic
   const totalPages = Math.ceil(items.length / config.gridSize);

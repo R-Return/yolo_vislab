@@ -31,11 +31,12 @@ interface ControlPanelProps {
   };
   isEditMode: boolean;
   onToggleEditMode: (enabled: boolean) => void;
-  onExportLabels: () => void;
+  onExportLabels: (asZip?: boolean) => void;
   onLoadAudio: () => void;
   onImportFolder: () => void;
   hasAudio: boolean;
   isExporting: boolean;
+  exportProgress?: { current: number, total: number } | null;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -58,7 +59,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onLoadAudio,
   onImportFolder,
   hasAudio,
-  isExporting
+  isExporting,
+  exportProgress
 }) => {
   const [mode, setMode] = useState<'view' | 'create' | 'rename'>('view');
   const [inputValue, setInputValue] = useState('');
@@ -222,14 +224,40 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   <Pencil className="w-3 h-3" /> {isEditMode ? 'Editing On' : 'Edit Labels'}
                 </button>
                 <button
-                  onClick={onExportLabels}
+                  onClick={() => onExportLabels(false)}
                   disabled={isExporting}
                   className="py-1.5 px-3 rounded text-xs flex items-center justify-center gap-1 border border-slate-600 bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white disabled:opacity-50"
-                  title="Download Modified Labels"
+                  title="Download Modified Labels to Folder"
                 >
                   {isExporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
                 </button>
               </div>
+
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => onExportLabels(true)}
+                  disabled={isExporting}
+                  className="flex-1 py-1 px-2 rounded text-[10px] flex items-center justify-center gap-1 border border-slate-600 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors"
+                  title="Download all modified labels as a single .zip file"
+                >
+                  <Download className="w-3 h-3" /> Download as Zip
+                </button>
+              </div>
+
+              {isExporting && exportProgress && (
+                <div className="mt-2 text-[10px] text-slate-400">
+                  <div className="flex justify-between mb-1">
+                    <span>Exporting...</span>
+                    <span>{exportProgress.current} / {exportProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-slate-700 rounded-full h-1.5">
+                    <div
+                      className="bg-primary h-1.5 rounded-full transition-all duration-300"
+                      style={{ width: `${(exportProgress.current / Math.max(1, exportProgress.total)) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

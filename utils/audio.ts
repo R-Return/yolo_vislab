@@ -147,13 +147,38 @@ export class AudioPlayer {
         const minFreq = options.minFreq ?? 500;
         const maxFreq = options.maxFreq ?? 12000;
 
-        const highpass = this.context.createBiquadFilter();
-        highpass.type = 'highpass';
-        highpass.frequency.value = minFreq;
+        // 12th-order Butterworth filter Q values (6 biquad stages)
+        // Ordered from lowest to highest Q to prevent internal clipping
+        const BUTTERWORTH_Q_12TH_ORDER = [0.5043, 0.5412, 0.6302, 0.8213, 1.3065, 3.8306];
+        const highpasses: BiquadFilterNode[] = [];
+        const lowpasses: BiquadFilterNode[] = [];
 
-        const lowpass = this.context.createBiquadFilter();
-        lowpass.type = 'lowpass';
-        lowpass.frequency.value = maxFreq;
+        for (const q of BUTTERWORTH_Q_12TH_ORDER) {
+            const hp = this.context.createBiquadFilter();
+            hp.type = 'highpass';
+            hp.frequency.value = minFreq;
+            hp.Q.value = q;
+            highpasses.push(hp);
+
+            const lp = this.context.createBiquadFilter();
+            lp.type = 'lowpass';
+            lp.frequency.value = maxFreq;
+            lp.Q.value = q;
+            lowpasses.push(lp);
+        }
+
+        // Chain the highpass filters
+        for (let i = 0; i < highpasses.length - 1; i++) {
+            highpasses[i].connect(highpasses[i + 1]);
+        }
+        // Connect highpass cascade to lowpass cascade
+        highpasses[highpasses.length - 1].connect(lowpasses[0]);
+        // Chain the lowpass filters
+        for (let i = 0; i < lowpasses.length - 1; i++) {
+            lowpasses[i].connect(lowpasses[i + 1]);
+        }
+        // Connect the final lowpass output to the destination
+        lowpasses[lowpasses.length - 1].connect(this.context.destination);
 
         // Channel Splitter
         const channel1 = this.currentFilename?.includes('ch1');
@@ -163,13 +188,10 @@ export class AudioPlayer {
             const splitter = this.context.createChannelSplitter(2);
             this.audioSource.connect(splitter);
             const channel = channel1 ? 0 : 1;
-            splitter.connect(highpass, channel);
+            splitter.connect(highpasses[0], channel);
         } else {
-            this.audioSource.connect(highpass);
+            this.audioSource.connect(highpasses[0]);
         }
-
-        highpass.connect(lowpass);
-        lowpass.connect(this.context.destination);
 
         const offsetSeconds = options.startTimeMs / 1000;
         const durationSeconds = options.durationMs / 1000;

@@ -70,6 +70,7 @@ export interface ImageItem {
   gtData?: BoundingBox[];
   predData?: BoundingBox[];
   isModified?: boolean;
+  isSaved?: boolean;
 }
 
 export interface FileCollection {

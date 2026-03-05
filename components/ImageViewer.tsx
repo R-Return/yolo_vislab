@@ -917,6 +917,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       freqBottom = maxF - (boxBottomY * (maxF - minF)); // Lower Freq
     }
 
+    // Strict Clamping: never play sound outside global minF and maxF under any circumstances
+    const clampFreq = (f: number) => Math.max(minF, Math.min(maxF, f));
+    const finalMinFreq = clampFreq(Math.min(freqTop, freqBottom));
+    const finalMaxFreq = clampFreq(Math.max(freqTop, freqBottom));
+
     const actualBox = fullBand ? { ...box, y: 0.5, h: 1.0 } : box;
 
     // Set Playing Highlight Bounds
@@ -949,8 +954,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     await audioPlayer.playSubRegion({
       startTimeMs: startTime,
       durationMs: duration,
-      minFreq: Math.min(freqTop, freqBottom),
-      maxFreq: Math.max(freqTop, freqBottom),
+      minFreq: finalMinFreq,
+      maxFreq: finalMaxFreq,
       playbackSpeed: playbackSpeed,
       onFinish: () => {
         finishPlayback();

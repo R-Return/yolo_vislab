@@ -445,6 +445,9 @@ const App: React.FC = () => {
       } else if (e.key === 'Enter') {
         e.preventDefault();
         toggleFocusMode(focusedItemIndex);
+      } else if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        setIsEditMode(prev => !prev);
       }
 
       // 10. Scroll into view

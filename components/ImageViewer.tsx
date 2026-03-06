@@ -462,21 +462,31 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         br: { x: lx + rw, y: ly + rh }
       };
 
+      let bestHandle = null;
+      let minDistance = Infinity;
+
       for (const [key, p] of Object.entries(handles)) {
         const dx = coords.rawX - p.x;
         const dy = coords.rawY - p.y;
-        if (Math.sqrt(dx * dx + dy * dy) < 30) { // Larger hit area for easier resizing
-          setSelectedBoxIdx(i);
-          setDragState({
-            mode: 'resize',
-            handle: key as any,
-            boxIndex: i,
-            startX: coords.x,
-            startY: coords.y,
-            initialBox: { ...b }
-          });
-          return;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 30 && dist < minDistance) {
+          minDistance = dist;
+          bestHandle = key;
         }
+      }
+
+      if (bestHandle) {
+        setSelectedBoxIdx(i);
+        setDragState({
+          mode: 'resize',
+          handle: bestHandle as any,
+          boxIndex: i,
+          startX: coords.x,
+          startY: coords.y,
+          initialBox: { ...b }
+        });
+        return;
       }
     }
 
@@ -942,6 +952,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     // Clear highlight immediately before timeout to prevent 1-frame flashes
     const finishPlayback = () => {
       if (playbackIdRef.current !== currentPlaybackId) return;
+      playbackIdRef.current += 1; // Kill animation loop
       setPlayhead(null);
       setPlayingBox(null);
       if (activePlaybackRef.current?.id === currentPlaybackId) {

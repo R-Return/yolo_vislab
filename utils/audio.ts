@@ -211,6 +211,7 @@ export class AudioPlayer {
             }, (durationSeconds / playbackSpeed) * 1000);
         } catch (e) {
             console.error("Audio playback failed", e);
+            if (this.currentOnFinish) this.currentOnFinish();
         }
     }
 }

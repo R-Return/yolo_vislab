@@ -94,14 +94,18 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   // Crosshairs State
   const [hoverCoords, setHoverCoords] = useState<{ x: number, y: number, timePx: number, freqHz: number } | null>(null);
 
-  // Sync props to local state when item changes (and not currently dragging/editing locally)
+  // Sync props to local state when item.gtData changes
   useEffect(() => {
     setLocalGtBoxes(item.gtData || []);
+  }, [item.gtData]);
+
+  // Only reset viewer state when navigating to a new item
+  useEffect(() => {
     setSelectedBoxIdx(null);
     setPlayingBox(null);
     setHidePlayingBorder(false);
     setTempAudioBox(null);
-  }, [item, item.gtData]); // Only reset when item specifically changes
+  }, [item.name]);
 
   // Close context menu
   useEffect(() => {
@@ -461,7 +465,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
       for (const [key, p] of Object.entries(handles)) {
         const dx = coords.rawX - p.x;
         const dy = coords.rawY - p.y;
-        if (Math.sqrt(dx * dx + dy * dy) < 15) { // Slightly larger hit area
+        if (Math.sqrt(dx * dx + dy * dy) < 30) { // Larger hit area for easier resizing
           setSelectedBoxIdx(i);
           setDragState({
             mode: 'resize',

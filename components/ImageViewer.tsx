@@ -365,8 +365,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   };
 
   // Coordinate Mapping
-  const getImgCoords = (e: React.MouseEvent) => {
-    if (!canvasRef.current || !cachedData) return { x: 0, y: 0 };
+  const getImgCoords = (e: React.MouseEvent | MouseEvent) => {
+    if (!canvasRef.current || !cachedData) return { x: 0, y: 0, rawX: 0, rawY: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
     const scaleX = canvasRef.current.width / rect.width;
     const scaleY = canvasRef.current.height / rect.height;
@@ -374,11 +374,14 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     const cx = (e.clientX - rect.left) * scaleX;
     const cy = (e.clientY - rect.top) * scaleY;
 
-    // Normalized coordinates (0-1)
-    const nx = cx / canvasRef.current.width;
-    const ny = cy / canvasRef.current.height;
+    // Normalized coordinates (0-1) clamped to boundaries
+    const nx = Math.max(0, Math.min(1, cx / canvasRef.current.width));
+    const ny = Math.max(0, Math.min(1, cy / canvasRef.current.height));
 
-    return { x: nx, y: ny, rawX: cx, rawY: cy };
+    const clampedRawX = Math.max(0, Math.min(canvasRef.current.width, cx));
+    const clampedRawY = Math.max(0, Math.min(canvasRef.current.height, cy));
+
+    return { x: nx, y: ny, rawX: clampedRawX, rawY: clampedRawY };
   };
 
   // Mouse Handlers
@@ -577,11 +580,20 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         const dx = coords.x - dragState.startX;
         const dy = coords.y - dragState.startY;
 
+        let newX = dragState.initialBox.x + dx;
+        let newY = dragState.initialBox.y + dy;
+        const halfW = dragState.initialBox.w / 2;
+        const halfH = dragState.initialBox.h / 2;
+
+        // Clamp so the box edges stay within [0, 1]
+        newX = Math.max(halfW, Math.min(1 - halfW, newX));
+        newY = Math.max(halfH, Math.min(1 - halfH, newY));
+
         const newBoxes = [...localGtBoxes];
         newBoxes[dragState.boxIndex] = {
           ...dragState.initialBox,
-          x: dragState.initialBox.x + dx,
-          y: dragState.initialBox.y + dy
+          x: newX,
+          y: newY
         };
         setLocalGtBoxes(newBoxes);
       } else if (dragState.mode === 'resize' && dragState.initialBox && dragState.handle) {

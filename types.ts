@@ -68,7 +68,7 @@ export interface ImageItem {
   name: string;
   file: File | FileSystemFileHandle;
   gtData?: BoundingBox[];
-  predData?: BoundingBox[];
+  predictions?: { sourceId: string, boxes: BoundingBox[], color: string, visible: boolean }[];
   isModified?: boolean;
   isSaved?: boolean;
 }
@@ -82,6 +82,16 @@ export interface FileCollection {
   count: number;
 }
 
+export interface PredictionSource {
+  id: string;
+  name: string;
+  path: string;
+  color: string;
+  visible: boolean;
+  labels: LabelMap;
+  groupId?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -90,10 +100,9 @@ export interface Project {
   imageCollectionId: string | null;
   gtCollectionId: string | null;
   // Project-Specific Data
-  predLabels: LabelMap; // Pre-loaded
+  predictionSources: PredictionSource[];
   imagePath?: string;
   gtPath?: string;
-  predPath?: string;
   audioPath?: string;
 }
 

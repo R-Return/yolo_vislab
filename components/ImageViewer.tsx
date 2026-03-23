@@ -151,9 +151,36 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
         // Filter out Predictions if in Edit Mode to reduce clutter (Requested Feature)
         // Except if showPredInEditMode is enabled
         const currentGt = isEditMode ? localGtBoxes : (item.gtData || []);
-        const currentPred = (isEditMode && config.showPredictions === false) ? [] : (item.predData || []);
+        const shouldShowPreds = !(isEditMode && config.showPredictions === false);
+        const visibleSources = item.predictions?.filter(p => p.visible) || [];
 
-        const renderBoxes = calculateMatches(currentGt, currentPred, config);
+        let renderBoxes: RenderBox[] = [];
+
+        if (shouldShowPreds && visibleSources.length > 0) {
+          const primaryMatches = calculateMatches(currentGt, visibleSources[0].boxes, config);
+          primaryMatches.forEach(m => {
+            if (m.type === BoxType.TP_PRED || m.type === BoxType.FP) {
+              m.color = visibleSources[0].color;
+            }
+          });
+          renderBoxes.push(...primaryMatches);
+
+          for (let i = 1; i < visibleSources.length; i++) {
+            const src = visibleSources[i];
+            src.boxes.forEach(b => {
+              if ((b.confidence || 1) >= config.confThreshold) {
+                renderBoxes.push({
+                  ...b,
+                  type: BoxType.TP_PRED,
+                  color: src.color,
+                  dashed: false
+                });
+              }
+            });
+          }
+        } else {
+          renderBoxes = calculateMatches(currentGt, [], config);
+        }
 
         const activeHighlightType = lockedStat || hoveredStat || externalHighlight;
 

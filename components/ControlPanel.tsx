@@ -1,7 +1,7 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, LayoutGrid, Maximize, Square, RectangleHorizontal, Download, Music, Loader2, Palette, Layout } from 'lucide-react';
-import { VisualizationConfig, Project, FileCollection, BoxStyle } from '../types';
+import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, LayoutGrid, Maximize, Square, RectangleHorizontal, Download, Music, Loader2, Palette, Layout, ChevronDown, ChevronRight, GripVertical } from 'lucide-react';
+import { VisualizationConfig, Project, FileCollection, BoxStyle, PredictionSource } from '../types';
 
 interface ControlPanelProps {
   projects: Project[];
@@ -26,9 +26,16 @@ interface ControlPanelProps {
     hasPred: boolean;
     imagePath?: string;
     gtPath?: string;
-    predPath?: string;
     audioPath?: string;
   };
+  predictionSources: PredictionSource[];
+  onTogglePredictionVisibility: (id: string, visible: boolean) => void;
+  onUpdatePredictionColor: (id: string, color: string) => void;
+  onDeletePrediction: (id: string) => void;
+  onReorderPredictions: (newSources: PredictionSource[]) => void;
+  onSetIsolatedPredictions: (ids: string[]) => void;
+  onToggleGroupVisibility: (groupId: string, visible: boolean) => void;
+  onToggleAllPredictionsVisibility: (visible: boolean) => void;
   isEditMode: boolean;
   onToggleEditMode: (enabled: boolean) => void;
   onExportLabels: (asZip?: boolean) => void;
@@ -38,6 +45,33 @@ interface ControlPanelProps {
   isExporting: boolean;
   exportProgress?: { current: number, total: number } | null;
 }
+
+const IndeterminateCheckbox: React.FC<{
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: (checked: boolean) => void;
+  className?: string;
+  title?: string;
+}> = ({ checked, indeterminate, onChange, className, title }) => {
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = indeterminate;
+    }
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      className={className}
+      title={title}
+    />
+  );
+};
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
   projects,
@@ -53,6 +87,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onConfigChange,
   config,
   stats,
+  predictionSources,
+  onTogglePredictionVisibility,
+  onUpdatePredictionColor,
+  onDeletePrediction,
+  onReorderPredictions,
+  onSetIsolatedPredictions,
+  onToggleGroupVisibility,
+  onToggleAllPredictionsVisibility,
   isEditMode,
   onToggleEditMode,
   onExportLabels,
@@ -65,6 +107,51 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const [mode, setMode] = useState<'view' | 'create' | 'rename'>('view');
   const [inputValue, setInputValue] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const dragStartIdx = useRef<number | null>(null);
+
+  const toggleGroup = (groupId: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
+  const handleDragStart = (idx: number) => {
+    dragStartIdx.current = idx;
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (dropIdx: number) => {
+    if (dragStartIdx.current === null) return;
+    const items = [...predictionSources];
+    const [reorderedItem] = items.splice(dragStartIdx.current, 1);
+    items.splice(dropIdx, 0, reorderedItem);
+    onReorderPredictions(items);
+    dragStartIdx.current = null;
+  };
+
+  // Grouping logic for rendering
+  const { groups, ungrouped } = useMemo(() => {
+    const g: Record<string, PredictionSource[]> = {};
+    const u: PredictionSource[] = [];
+
+    predictionSources.forEach(s => {
+      if (s.groupId) {
+        if (!g[s.groupId]) g[s.groupId] = [];
+        g[s.groupId].push(s);
+      } else {
+        u.push(s);
+      }
+    });
+
+    return { groups: g, ungrouped: u };
+  }, [predictionSources]);
 
   const activeProject = projects.find(p => p.id === activeProjectId);
 
@@ -263,28 +350,163 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
 
         {/* Pred Labels */}
-        <div className="space-y-1">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-slate-400 text-xs block">Predictions</label>
-            {stats.hasPred && (
-              <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={config.showPredictions ?? true}
-                  onChange={(e) => onConfigChange({ ...config, showPredictions: e.target.checked })}
-                  className="rounded bg-slate-700 border-slate-600 text-primary w-3 h-3"
-                />
-                Show Boxes
-              </label>
+            <label className="text-slate-400 text-xs block font-medium">Predictions</label>
+            {predictionSources.length > 0 && (
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-slate-300">
+                  <IndeterminateCheckbox
+                    checked={predictionSources.every(s => s.visible)}
+                    indeterminate={predictionSources.some(s => s.visible) && !predictionSources.every(s => s.visible)}
+                    onChange={(checked) => onToggleAllPredictionsVisibility(checked)}
+                    className="rounded bg-slate-700 border-slate-600 text-primary w-3 h-3 cursor-pointer"
+                    title="Toggle All Predictions"
+                  />
+                  Select All
+                </label>
+                <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={config.showPredictions ?? true}
+                    onChange={(e) => onConfigChange({ ...config, showPredictions: e.target.checked })}
+                    className="rounded bg-slate-700 border-slate-600 text-primary w-3 h-3 cursor-pointer"
+                  />
+                  Show UI
+                </label>
+              </div>
             )}
           </div>
+
+          {predictionSources.length > 0 && (
+            <div className="space-y-3 mb-2 max-h-[400px] overflow-y-auto pr-1 custom-scrollbar">
+              {/* Ungrouped Predictions */}
+              {ungrouped.map((source) => {
+                const globalIdx = predictionSources.findIndex(s => s.id === source.id);
+                return (
+                  <div
+                    key={source.id}
+                    draggable
+                    onDragStart={() => handleDragStart(globalIdx)}
+                    onDragOver={handleDragOver}
+                    onDrop={() => handleDrop(globalIdx)}
+                    onMouseEnter={() => onSetIsolatedPredictions([source.id])}
+                    onMouseLeave={() => onSetIsolatedPredictions([])}
+                    className="flex items-center justify-between bg-slate-800/50 p-1.5 rounded border border-slate-700 hover:border-slate-500 transition-colors cursor-grab active:cursor-grabbing group"
+                  >
+                    <div className="flex items-center gap-2 overflow-hidden flex-1">
+                      <GripVertical className="w-3 h-3 text-slate-600 group-hover:text-slate-400 flex-shrink-0" />
+                      <input
+                        type="color"
+                        value={source.color}
+                        onChange={(e) => onUpdatePredictionColor(source.id, e.target.value)}
+                        className="w-4 h-4 rounded cursor-pointer bg-transparent border-none flex-shrink-0"
+                        title="Change Color"
+                      />
+                      <span className="text-xs text-slate-300 truncate" title={source.path}>{source.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 ml-2">
+                      <input
+                        type="checkbox"
+                        checked={source.visible}
+                        onChange={(e) => onTogglePredictionVisibility(source.id, e.target.checked)}
+                        className="w-3.5 h-3.5 rounded bg-slate-700 border-slate-600 text-primary cursor-pointer"
+                        title="Toggle Visibility"
+                      />
+                      <button
+                        onClick={() => onDeletePrediction(source.id)}
+                        className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Grouped Predictions */}
+              {(Object.entries(groups) as [string, PredictionSource[]][]).map(([groupId, sources]) => (
+                <div key={groupId} className="space-y-1 bg-slate-900/30 rounded-lg p-1 border border-slate-800/50">
+                  <div
+                    onMouseEnter={() => onSetIsolatedPredictions(sources.map(s => s.id))}
+                    onMouseLeave={() => onSetIsolatedPredictions([])}
+                    className="flex items-center justify-between px-2 py-1 cursor-pointer hover:bg-slate-800/50 rounded transition-colors group"
+                  >
+                    <div className="flex items-center gap-2 overflow-hidden" onClick={() => toggleGroup(groupId)}>
+                      {collapsedGroups.has(groupId) ? <ChevronRight className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider truncate">{groupId}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-600 group-hover:text-slate-400">{sources.length} models</span>
+                      <IndeterminateCheckbox
+                        checked={sources.every(s => s.visible)}
+                        indeterminate={sources.some(s => s.visible) && !sources.every(s => s.visible)}
+                        onChange={(checked) => onToggleGroupVisibility(groupId, checked)}
+                        className="w-3.5 h-3.5 rounded bg-slate-700 border-slate-600 text-primary cursor-pointer"
+                        title="Toggle Group Visibility"
+                      />
+                    </div>
+                  </div>
+
+                  {!collapsedGroups.has(groupId) && (
+                    <div className="space-y-1 pl-2">
+                      {sources.map((source) => {
+                        const globalIdx = predictionSources.findIndex(s => s.id === source.id);
+                        return (
+                          <div
+                            key={source.id}
+                            draggable
+                            onDragStart={() => handleDragStart(globalIdx)}
+                            onDragOver={handleDragOver}
+                            onDrop={() => handleDrop(globalIdx)}
+                            onMouseEnter={() => onSetIsolatedPredictions([source.id])}
+                            onMouseLeave={() => onSetIsolatedPredictions([])}
+                            className="flex items-center justify-between bg-slate-800/30 p-1.5 rounded border border-transparent hover:border-slate-700 transition-colors cursor-grab active:cursor-grabbing group"
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden flex-1">
+                              <GripVertical className="w-3 h-3 text-slate-700 group-hover:text-slate-500 flex-shrink-0" />
+                              <input
+                                type="color"
+                                value={source.color}
+                                onChange={(e) => onUpdatePredictionColor(source.id, e.target.value)}
+                                className="w-3.5 h-3.5 rounded cursor-pointer bg-transparent border-none flex-shrink-0"
+                                title="Change Color"
+                              />
+                              <span className="text-xs text-slate-400 truncate" title={source.path}>{source.name}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 ml-2">
+                              <input
+                                type="checkbox"
+                                checked={source.visible}
+                                onChange={(e) => onTogglePredictionVisibility(source.id, e.target.checked)}
+                                className="w-3 h-3 rounded bg-slate-700 border-slate-600 text-primary cursor-pointer"
+                                title="Toggle Visibility"
+                              />
+                              <button
+                                onClick={() => onDeletePrediction(source.id)}
+                                className="p-1 rounded hover:bg-slate-700 text-slate-600 hover:text-red-400 transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           <button
             onClick={onLoadPred}
-            className={`w-full py-2 px-3 rounded flex items-center justify-center gap-2 transition-colors text-xs border border-dashed ${stats.hasPred ? 'bg-amber-500/20 border-amber-500 text-amber-500' : 'bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600'}`}
+            className={`w-full py-2 px-3 rounded flex items-center justify-center gap-2 transition-colors text-xs border border-dashed ${predictionSources.length > 0 ? 'bg-amber-500/10 border-amber-500/50 text-amber-500 hover:bg-amber-500/20' : 'bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600'}`}
           >
-            <Upload className="w-3 h-3" /> {stats.predPath ? stats.predPath : 'Load Predictions'}
+            <Upload className="w-3 h-3" /> Load Predictions
           </button>
-          {stats.predPath && <p className="text-[10px] text-slate-500 truncate px-1">Source: {stats.predPath}</p>}
         </div>
 
         {/* Audio */}

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ImageViewer from './components/ImageViewer';
 import PRGraph from './components/PRGraph';
-import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap, BoundingBox } from './types';
+import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap, BoundingBox, PredictionSource } from './types';
 import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle, PanelRight } from 'lucide-react';
 import { drawVisualization } from './utils/render';
 import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
@@ -17,10 +17,10 @@ const DEFAULT_CONFIG: VisualizationConfig = {
   ioMinThreshold: 0.5,
   confThreshold: 0.25,
   styles: {
-    tpPred: { color: '#4ade80', dashed: false }, // Green, Solid
-    tpGt: { color: '#ffffff', dashed: true },  // White, Dashed
-    fn: { color: '#72f8ef', dashed: true },  // Blue/Cyan, Dashed
-    fp: { color: '#fbbf24', dashed: false }, // Amber, Solid
+    tpPred: { color: '#00FFFF', dashed: false }, // Cyan, Solid
+    tpGt: { color: '#FFFFFF', dashed: true },  // White, Dashed
+    fn: { color: '#00FF00', dashed: true },  // Lime, Dashed
+    fp: { color: '#FFFF00', dashed: false }, // Yellow, Solid
   },
   lineWidth: 4,
   labelFontSize: 23,
@@ -51,7 +51,7 @@ const createProject = (name: string): Project => ({
   config: { ...DEFAULT_CONFIG },
   imageCollectionId: null,
   gtCollectionId: null,
-  predLabels: {}, // Local
+  predictionSources: [], // Local
 });
 
 const App: React.FC = () => {
@@ -82,7 +82,8 @@ const App: React.FC = () => {
   // Focus and Workflow State
   const [focusedItemIndex, setFocusedItemIndex] = useState(0);
 
-  // Sidebar State
+  // Sidebar & Prediction Isolation State
+  const [isolatedPredictionIds, setIsolatedPredictionIds] = useState<string[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(250);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const isDragging = useRef(false);
@@ -101,7 +102,7 @@ const App: React.FC = () => {
     collections.find(c => c.id === activeProject.gtCollectionId)?.labels || {},
     [collections, activeProject.gtCollectionId]);
 
-  const predLabels = activeProject.predLabels;
+  const predictionSources = activeProject.predictionSources || [];
 
   // State Updates
   const updateProject = (updates: Partial<Project>) => {
@@ -211,11 +212,66 @@ const App: React.FC = () => {
         }
       }
       const labelMap = await preloadLabels(fileMap);
-      updateProject({ predLabels: labelMap, predPath: dirHandle.name });
+
+      const colors = ['#f43f5e', '#ec4899', '#d946ef', '#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9'];
+      const currentCount = activeProject.predictionSources?.length || 0;
+      const color = colors[currentCount % colors.length];
+
+      const newSource: PredictionSource = {
+        id: generateId(),
+        name: dirHandle.name,
+        path: dirHandle.name,
+        color: color,
+        visible: true,
+        labels: labelMap
+      };
+
+      updateProject({
+        predictionSources: [...(activeProject.predictionSources || []), newSource]
+      });
     } catch (err) {
       console.error("Failed to load predictions", err);
     }
   };
+
+  const handleTogglePredictionVisibility = (id: string, visible: boolean) => {
+    updateProject({
+      predictionSources: (activeProject.predictionSources || []).map((s: PredictionSource) => s.id === id ? { ...s, visible } : s)
+    });
+  };
+
+  const handleUpdatePredictionColor = (id: string, color: string) => {
+    updateProject({
+      predictionSources: (activeProject.predictionSources || []).map((s: PredictionSource) => s.id === id ? { ...s, color } : s)
+    });
+  };
+
+  const handleDeletePrediction = (id: string) => {
+    updateProject({
+      predictionSources: (activeProject.predictionSources || []).filter((s: PredictionSource) => s.id !== id)
+    });
+    setIsolatedPredictionIds(prev => prev.filter(pId => pId !== id));
+  };
+
+  const handleReorderPredictions = (newSources: PredictionSource[]) => {
+    updateProject({ predictionSources: newSources });
+  };
+
+  const handleToggleGroupVisibility = (groupId: string, visible: boolean) => {
+    updateProject({
+      predictionSources: (activeProject.predictionSources || []).map((s: PredictionSource) =>
+        s.groupId === groupId ? { ...s, visible } : s
+      )
+    });
+  };
+
+  const handleToggleAllPredictionsVisibility = (visible: boolean) => {
+    updateProject({
+      predictionSources: (activeProject.predictionSources || []).map((s: PredictionSource) => ({ ...s, visible }))
+    });
+  };
+
+
 
   const handleUpdateLabels = (fileName: string, newBoxes: BoundingBox[]) => {
     if (!activeProject.gtCollectionId) return;
@@ -358,6 +414,7 @@ const App: React.FC = () => {
       let imgMap: FileMap = {};
       let gtMap: FileMap = {};
       let predMap: FileMap = {};
+      let predSubfolders: { name: string, map: FileMap, groupId?: string, subfolders?: { name: string, map: FileMap }[] }[] = [];
       let audioMap: FileMap = {};
 
       let hasImages = false;
@@ -387,9 +444,28 @@ const App: React.FC = () => {
           } else if (entry.name === 'predictions') {
             hasPred = true;
             // @ts-ignore
-            for await (const file of entry.values()) {
-              if (file.kind === 'file' && !file.name.startsWith('.')) {
-                predMap[file.name] = file;
+            for await (const subEntry of entry.values()) {
+              if (subEntry.kind === 'directory') {
+                let subMap: FileMap = {};
+                let nestedFolders: { name: string, map: FileMap }[] = [];
+                // @ts-ignore
+                for await (const nestedEntry of subEntry.values()) {
+                  if (nestedEntry.kind === 'directory') {
+                    let leafMap: FileMap = {};
+                    // @ts-ignore
+                    for await (const file of nestedEntry.values()) {
+                      if (file.kind === 'file' && !file.name.startsWith('.')) {
+                        leafMap[file.name] = file;
+                      }
+                    }
+                    nestedFolders.push({ name: nestedEntry.name, map: leafMap });
+                  } else if (nestedEntry.kind === 'file' && !nestedEntry.name.startsWith('.')) {
+                    subMap[nestedEntry.name] = nestedEntry;
+                  }
+                }
+                predSubfolders.push({ name: subEntry.name, map: subMap, subfolders: nestedFolders });
+              } else if (subEntry.kind === 'file' && !subEntry.name.startsWith('.')) {
+                predMap[subEntry.name] = subEntry;
               }
             }
           } else if (entry.name === 'audio') {
@@ -423,8 +499,75 @@ const App: React.FC = () => {
       }
 
       if (hasPred) {
-        const labelMap = await preloadLabels(predMap);
-        updateProject({ predLabels: labelMap, predPath: `${dirHandle.name}/predictions` });
+        // High Contrast Palette
+        const baseColors = ['#00FFFF', '#00FF00', '#FFFF00', '#FF00FF', '#FFFFFF', '#FF8C00', '#00BFFF', '#39FF14'];
+        let colorIdx = activeProject.predictionSources?.length || 0;
+        let newSources: PredictionSource[] = [];
+
+        const getNextColor = () => baseColors[colorIdx++ % baseColors.length];
+
+        // Helper to lighten/darken for group variations
+        const adjustColor = (hex: string, percent: number) => {
+          const num = parseInt(hex.replace('#', ''), 16),
+            amt = Math.round(2.55 * percent),
+            R = (num >> 16) + amt,
+            G = (num >> 8 & 0x00FF) + amt,
+            B = (num & 0x0000FF) + amt;
+          return '#' + (0x1000000 + (R < 255 ? R < 0 ? 0 : R : 255) * 0x10000 + (G < 255 ? G < 0 ? 0 : G : 255) * 0x100 + (B < 255 ? B < 0 ? 0 : B : 255)).toString(16).slice(1);
+        };
+
+        if (Object.keys(predMap).length > 0) {
+          const labelMap = await preloadLabels(predMap);
+          newSources.push({
+            id: generateId(),
+            name: 'Predictions',
+            path: `${dirHandle.name}/predictions`,
+            color: getNextColor(),
+            visible: true,
+            labels: labelMap
+          });
+        }
+
+        for (const group of predSubfolders) {
+          const groupColor = getNextColor();
+
+          if (Object.keys(group.map).length > 0) {
+            const labelMap = await preloadLabels(group.map);
+            newSources.push({
+              id: generateId(),
+              name: group.name,
+              path: `${dirHandle.name}/predictions/${group.name}`,
+              color: groupColor,
+              visible: true,
+              labels: labelMap,
+              groupId: group.subfolders && group.subfolders.length > 0 ? group.name : undefined
+            });
+          }
+
+          if (group.subfolders) {
+            let subIdx = 0;
+            for (const sub of group.subfolders) {
+              if (Object.keys(sub.map).length > 0) {
+                const labelMap = await preloadLabels(sub.map);
+                newSources.push({
+                  id: generateId(),
+                  name: sub.name,
+                  path: `${dirHandle.name}/predictions/${group.name}/${sub.name}`,
+                  // Vary color slightly within group
+                  color: adjustColor(groupColor, (subIdx + 1) * -15),
+                  visible: true,
+                  labels: labelMap,
+                  groupId: group.name
+                });
+                subIdx++;
+              }
+            }
+          }
+        }
+
+        if (newSources.length > 0) {
+          updateProject({ predictionSources: [...(activeProject.predictionSources || []), ...newSources] });
+        }
       }
 
       if (hasAudio) {
@@ -465,16 +608,31 @@ const App: React.FC = () => {
     return imageNames.map(imgName => {
       const baseName = imgName.substring(0, imgName.lastIndexOf('.'));
       const txtName = `${baseName}.txt`;
+
+      const predictions = (activeProject.predictionSources || [])
+        .filter(src => {
+          if (isolatedPredictionIds.length > 0) {
+            return isolatedPredictionIds.includes(src.id);
+          }
+          return true;
+        })
+        .map((src: PredictionSource) => ({
+          sourceId: src.id,
+          boxes: src.labels[txtName] || [],
+          color: src.color,
+          visible: src.visible
+        }));
+
       return {
         name: imgName,
         file: imageFiles[imgName],
         gtData: gtLabels[txtName],
-        predData: predLabels[txtName],
+        predictions: predictions,
         isModified: modifiedFiles.has(txtName),
         isSaved: savedFiles.has(txtName),
       };
     });
-  }, [imageFiles, gtLabels, predLabels, modifiedFiles, savedFiles]);
+  }, [imageFiles, gtLabels, activeProject.predictionSources, isolatedPredictionIds, modifiedFiles, savedFiles]);
 
   // Pagination Logic
   const totalPages = Math.ceil(items.length / config.gridSize);
@@ -491,30 +649,39 @@ const App: React.FC = () => {
   // Handle Grid Size Change - Recalculate Page to maintain visual continuity
   useEffect(() => {
     const prevGridSize = prevGridSizeRef.current;
-    if (prevGridSize !== config.gridSize && prevGridSize !== 1 && config.gridSize !== 1) {
-      const firstItemIndex = currentPage * prevGridSize;
-      const newPage = Math.floor(firstItemIndex / config.gridSize);
+    if (prevGridSize !== config.gridSize) {
+      let absoluteIndex = 0;
+      if (prevGridSize === 1) {
+        absoluteIndex = currentPage;
+      } else {
+        absoluteIndex = currentPage * prevGridSize + focusedItemIndex;
+      }
+
+      let newPage = 0;
+      if (config.gridSize === 1) {
+        newPage = absoluteIndex;
+        setFocusedItemIndex(0);
+      } else {
+        newPage = Math.floor(absoluteIndex / config.gridSize);
+        setFocusedItemIndex(absoluteIndex % config.gridSize);
+      }
+
       setCurrentPage(newPage);
       prevGridSizeRef.current = config.gridSize;
     }
-  }, [config.gridSize, currentPage]);
+  }, [config.gridSize, currentPage, focusedItemIndex]);
 
   const toggleFocusMode = (indexInPage: number) => {
     if (config.gridSize === 1) {
       // Revert to prev
       const revertGrid = prevGridSizeRef.current === 1 ? 9 : prevGridSizeRef.current;
-      const globalIndex = currentPage; // currentPage in 1x1 is the absolute item index
-      const newPage = Math.floor(globalIndex / revertGrid);
       setConfig({ ...config, gridSize: revertGrid });
-      setCurrentPage(newPage);
-      setFocusedItemIndex(globalIndex % revertGrid);
     } else {
       // Enter Focus Mode
-      prevGridSizeRef.current = config.gridSize;
-      const globalIndex = currentPage * config.gridSize + indexInPage;
+      if (indexInPage !== focusedItemIndex) {
+        setFocusedItemIndex(indexInPage);
+      }
       setConfig({ ...config, gridSize: 1 });
-      setCurrentPage(globalIndex);
-      setFocusedItemIndex(0); // 0th index in a 1-item page
     }
   };
 
@@ -592,8 +759,9 @@ const App: React.FC = () => {
     const totals = { tp: 0, fp: 0, fn: 0 };
     currentItems.forEach((item) => {
       const gtBoxes = item.gtData || [];
-      const predBoxes = item.predData || [];
-      const result = calculateMatches(gtBoxes, predBoxes, config);
+      const visibleSources = item.predictions?.filter(p => p.visible) || [];
+      const primaryPred = visibleSources.length > 0 ? visibleSources[0].boxes : [];
+      const result = calculateMatches(gtBoxes, primaryPred, config);
 
       result.forEach(b => {
         if (b.type === BoxType.TP_PRED) totals.tp++;
@@ -774,15 +942,22 @@ const App: React.FC = () => {
         onImportImages={handleLoadImages}
         onImportGT={handleLoadGT}
         onLoadPred={handleLoadPred}
+        predictionSources={activeProject.predictionSources || []}
+        onTogglePredictionVisibility={handleTogglePredictionVisibility}
+        onUpdatePredictionColor={handleUpdatePredictionColor}
+        onDeletePrediction={handleDeletePrediction}
+        onReorderPredictions={handleReorderPredictions}
+        onSetIsolatedPredictions={setIsolatedPredictionIds}
+        onToggleGroupVisibility={handleToggleGroupVisibility}
+        onToggleAllPredictionsVisibility={handleToggleAllPredictionsVisibility}
         config={config}
         onConfigChange={setConfig}
         stats={{
           totalImages: items.length,
           hasGt: Object.keys(gtLabels).length > 0,
-          hasPred: Object.keys(predLabels).length > 0,
+          hasPred: (activeProject.predictionSources || []).length > 0,
           imagePath: activeProject.imagePath,
           gtPath: activeProject.gtPath,
-          predPath: activeProject.predPath,
           audioPath: activeProject.audioPath
         }}
         isEditMode={isEditMode}

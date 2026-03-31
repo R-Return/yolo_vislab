@@ -817,31 +817,60 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const img = new Image();
-      const url = URL.createObjectURL(item.file);
-      img.src = url;
-      await new Promise((resolve) => img.onload = resolve);
+      const srcCanvas = canvasRef.current;
+      if (!srcCanvas) return;
 
+      const imgWidth = srcCanvas.width;
+      const imgHeight = srcCanvas.height;
+
+      const headerHeight = Math.max(30, Math.floor(imgHeight * 0.05));
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width = imgWidth;
+      canvas.height = imgHeight + headerHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      const dynamicFontSize = Math.max(12, Math.floor(img.naturalWidth * 0.02));
-      const dynamicLineWidth = Math.max(1, Math.floor(img.naturalWidth * 0.002));
+      // Draw header background
+      ctx.fillStyle = '#1e293b'; // bg-slate-800
+      ctx.fillRect(0, 0, canvas.width, headerHeight);
 
-      await drawVisualization(ctx, item, config, img.naturalWidth, img.naturalHeight, img, {
-        fontSize: dynamicFontSize,
-        forceLineWidth: dynamicLineWidth
-      });
+      // Draw the image from the live canvas
+      ctx.drawImage(srcCanvas, 0, headerHeight);
+
+      // Draw Filename
+      const textPadding = Math.max(10, canvas.width * 0.01);
+      ctx.fillStyle = '#cbd5e1'; // text-slate-300
+      ctx.font = `bold ${Math.max(14, headerHeight * 0.4)}px monospace`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(item.name, textPadding, headerHeight / 2);
+
+      // Draw Stats (TP, FN, FP) right-aligned
+      const statFontSize = Math.max(12, headerHeight * 0.4);
+      ctx.font = `bold ${statFontSize}px monospace`;
+
+      const fpText = `FP:${computedStats.fp}`;
+      const fnText = `FN:${computedStats.fn}`;
+      const tpText = `TP:${computedStats.tp}`;
+
+      let xOffset = canvas.width - textPadding;
+      ctx.textAlign = 'right';
+
+      ctx.fillStyle = config.styles.fp.color;
+      ctx.fillText(fpText, xOffset, headerHeight / 2);
+      xOffset -= ctx.measureText(fpText).width + statFontSize;
+
+      ctx.fillStyle = config.styles.fn.color;
+      ctx.fillText(fnText, xOffset, headerHeight / 2);
+      xOffset -= ctx.measureText(fnText).width + statFontSize;
+
+      ctx.fillStyle = config.styles.tpPred.color;
+      ctx.fillText(tpText, xOffset, headerHeight / 2);
 
       const link = document.createElement('a');
       link.download = `vis_${item.name}`;
       link.href = canvas.toDataURL('image/jpeg', 0.95);
       link.click();
-
-      URL.revokeObjectURL(url);
     } catch (e) {
       console.error("Download failed", e);
     } finally {

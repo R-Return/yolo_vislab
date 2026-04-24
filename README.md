@@ -70,7 +70,7 @@ To leverage the unified folder upload feature, organize your dataset within a pa
 ```text
 dataset_folder/
 ├── images/       # Spectrograms (.png, .jpg)
-├── audio/        # Corresponding full audio clips (.wav, .mp3)
+├── audio/        # Corresponding full audio clips (.wav, .ogg, .mp3, .m4a)
 ├── labels/       # Ground truth annotations (YOLO TXT format)
 └── predictions/  # Model output annotations (YOLO TXT format)
 ```

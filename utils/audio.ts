@@ -32,24 +32,29 @@ export const extractStartTimeFromFilename = (filename: string): number => {
 };
 
 /**
- * Extracts the base name for the audio file.
- * Example: Bridge2958_20200706$070000_ch1_w000000_t0.png 
- * matches to Bridge2958_20200706$070000.wav (based on prefix assumption from user)
- * Actually user said: "audio file name is Bridge2958_20200706$070000.wav"
- * So we need to strip _ch1_w000000_t0.png
+ * Supported audio extensions, in preference order when multiple files share a base name.
+ * Matches the directory-scan whitelist in App.tsx.
  */
-export const getAudioFilename = (imageName: string): string => {
-    // Logic: Split by _ch1 or the first segment that looks like the variable part?
-    // User example: Bridge2958_20200706$070000_ch1_w000000_t0.png
-    // Audio: Bridge2958_20200706$070000.wav
-    // It seems like we split by `_ch`.
+const AUDIO_EXT_PRIORITY = ['wav', 'ogg', 'mp3', 'm4a'] as const;
+
+/**
+ * Resolves the audio file key for a given image name against the loaded audio map.
+ * Strips the _chN/_wN/_tN suffix to get the base, then returns whichever supported
+ * extension actually exists in audioFiles (preferring .wav for backward compatibility).
+ * Example: Bridge2958_20200706$070000_ch1_w000000_t0.png -> Bridge2958_20200706$070000.ogg
+ * Returns null if no matching audio file is present.
+ */
+export const getAudioFilename = (
+    imageName: string,
+    audioFiles: { [name: string]: unknown },
+): string | null => {
     const parts = imageName.split(/_(ch\d+|w\d+|t\d+)/);
-    if (parts.length > 0) {
-        // Reconstruct the base if needed, or just take the first part if it's clean
-        // Bridge2958_20200706$070000 is the first part before _ch1...
-        return `${parts[0]}.wav`;
+    const base = parts[0] || imageName.replace(/\.[^.]+$/, '');
+    for (const ext of AUDIO_EXT_PRIORITY) {
+        const candidate = `${base}.${ext}`;
+        if (audioFiles[candidate]) return candidate;
     }
-    return imageName.replace('.png', '.wav'); // Fallback
+    return null;
 };
 
 export class AudioPlayer {

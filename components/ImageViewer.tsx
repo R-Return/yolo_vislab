@@ -965,13 +965,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
   const playAudioForBox = async (box: BoundingBox, fullBand: boolean = false, hideBorder: boolean = false) => {
     if (!audioPlayer || !audioFiles) return;
 
-    const audioName = getAudioFilename(item.name);
-    const fileHandle = audioFiles[audioName];
-    if (!fileHandle) {
-      console.warn("Audio file not found:", audioName);
-      alert(`Audio file not found: ${audioName}`);
+    const audioName = getAudioFilename(item.name, audioFiles);
+    if (!audioName) {
+      console.warn("Audio file not found for image:", item.name);
+      alert(`Audio file not found for: ${item.name}`);
       return;
     }
+    const fileHandle = audioFiles[audioName];
 
     await audioPlayer.loadAudioFile(fileHandle);
 

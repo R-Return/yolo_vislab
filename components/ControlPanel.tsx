@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Settings, Monitor, FileImage, FileText, FolderPlus, FolderOpen, Trash2, Pencil, Check, X, Database, Link, Upload, LayoutGrid, Maximize, Square, RectangleHorizontal, Download, Music, Loader2, Palette, Layout, ChevronDown, ChevronRight, GripVertical } from 'lucide-react';
-import { VisualizationConfig, Project, FileCollection, BoxStyle, PredictionSource } from '../types';
+import { VisualizationConfig, Project, FileCollection, BoxStyle, PredictionSource, MatchOverlapMetric } from '../types';
 
 interface ControlPanelProps {
   projects: Project[];
@@ -558,9 +558,59 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
             />
           </div>
-          <div>
-            <div className="flex justify-between mb-1"><label className="text-slate-300 text-[10px]">IoMin Threshold</label><span className="text-[10px] text-primary">{config.ioMinThreshold.toFixed(2)}</span></div>
-            <input type="range" min="0.1" max="1.0" step="0.05" value={config.ioMinThreshold} onChange={(e) => onConfigChange({ ...config, ioMinThreshold: parseFloat(e.target.value) })} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
+          <div className="space-y-2">
+            <label className="text-slate-300 text-[10px] block">Overlap metric</label>
+            <select
+              value={config.matchOverlapMetric}
+              onChange={(e) =>
+                onConfigChange({ ...config, matchOverlapMetric: e.target.value as MatchOverlapMetric })
+              }
+              className="w-full py-1 px-2 rounded border border-slate-600 bg-slate-700 text-[10px] text-slate-200"
+            >
+              <option value="iou">IoU</option>
+              <option value="iomin">IoMin</option>
+            </select>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              <span className="text-slate-400">IoU:</span> standard Intersection over Union
+              <br />
+              <span className="text-slate-400">IoMin:</span> Intersection over the smallest box area (intersection /
+              min(ground_truth, prediction)).
+            </p>
+            <div>
+              <div className="flex justify-between items-center gap-2 mb-1">
+                <label className="text-slate-300 text-[10px] shrink-0">Overlap threshold</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={Number(config.matchOverlapThreshold.toFixed(2))}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    if (Number.isNaN(v)) return;
+                    onConfigChange({
+                      ...config,
+                      matchOverlapThreshold: Math.min(1, Math.max(0, Math.round(v * 100) / 100)),
+                    });
+                  }}
+                  className="w-16 shrink-0 py-0.5 px-1 rounded border border-slate-600 bg-slate-700 text-[10px] text-primary text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={Math.min(
+                  1,
+                  Math.max(0, Math.round(config.matchOverlapThreshold / 0.05) * 0.05)
+                )}
+                onChange={(e) =>
+                  onConfigChange({ ...config, matchOverlapThreshold: parseFloat(e.target.value) })
+                }
+                className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+            </div>
           </div>
         </div>
       </div>

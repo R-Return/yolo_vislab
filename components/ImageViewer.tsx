@@ -229,7 +229,23 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
     render();
 
     return () => { active = false; };
-  }, [item, config, config.ioMinThreshold, config.confThreshold, config.showLabels, localGtBoxes, isEditMode, hoveredStat, lockedStat, externalHighlight, playingBox, playhead, tempAudioBox, hidePlayingBorder]); // Re-render when boxes or playhead change
+  }, [
+    item,
+    config,
+    config.matchOverlapMetric,
+    config.matchOverlapThreshold,
+    config.confThreshold,
+    config.showLabels,
+    localGtBoxes,
+    isEditMode,
+    hoveredStat,
+    lockedStat,
+    externalHighlight,
+    playingBox,
+    playhead,
+    tempAudioBox,
+    hidePlayingBorder,
+  ]); // Re-render when boxes or playhead change
 
   // Global Deletion Listener
   useEffect(() => {

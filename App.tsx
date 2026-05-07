@@ -14,7 +14,8 @@ import { saveLabelToDB, getAllSavedLabels, deleteLabelFromDB, clearAllLabelsFrom
 const audioPlayer = new AudioPlayer();
 
 const DEFAULT_CONFIG: VisualizationConfig = {
-  ioMinThreshold: 0.5,
+  matchOverlapMetric: 'iou',
+  matchOverlapThreshold: 0.5,
   confThreshold: 0.25,
   styles: {
     tpPred: { color: '#00FFFF', dashed: false }, // Cyan, Solid
@@ -771,7 +772,7 @@ const App: React.FC = () => {
     });
 
     setPageStats(totals);
-  }, [currentItems, config.ioMinThreshold, config.confThreshold]);
+  }, [currentItems, config.matchOverlapMetric, config.matchOverlapThreshold, config.confThreshold]);
 
 
   const nextPage = () => setCurrentPage(p => Math.min(p + 1, totalPages - 1));

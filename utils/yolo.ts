@@ -1,4 +1,4 @@
-import { BoundingBox, BoxType, RenderBox, VisualizationConfig, ImageItem } from '../types';
+import { BoundingBox, BoxType, MatchOverlapMetric, RenderBox, VisualizationConfig, ImageItem } from '../types';
 
 /**
  * Parses a YOLO format string into BoundingBox objects.
@@ -44,12 +44,10 @@ export const preloadLabels = async (fileMap: { [name: string]: File | FileSystem
   return labelMap;
 };
 
-/**
- * Calculates Intersection over Minimum Area (IoMin).
- * IoMin = Area(Intersection) / min(Area(Pred), Area(GT)).
- * This helps handle big predictions and small GTs, and vice versa.
- */
-const calculateIoMin = (pred: BoundingBox, gt: BoundingBox): number => {
+const intersectAndAreas = (
+  pred: BoundingBox,
+  gt: BoundingBox
+): { intersectionArea: number; predArea: number; gtArea: number } => {
   const b1_x1 = pred.x - pred.w / 2;
   const b1_y1 = pred.y - pred.h / 2;
   const b1_x2 = pred.x + pred.w / 2;
@@ -65,23 +63,43 @@ const calculateIoMin = (pred: BoundingBox, gt: BoundingBox): number => {
   const x2 = Math.min(b1_x2, b2_x2);
   const y2 = Math.min(b1_y2, b2_y2);
 
-  if (x2 < x1 || y2 < y1) return 0.0;
-
-  const intersectionArea = (x2 - x1) * (y2 - y1);
-
   const predArea = pred.w * pred.h;
   const gtArea = gt.w * gt.h;
 
-  const minArea = Math.min(predArea, gtArea);
+  if (x2 < x1 || y2 < y1) {
+    return { intersectionArea: 0, predArea, gtArea };
+  }
 
+  const intersectionArea = (x2 - x1) * (y2 - y1);
+  return { intersectionArea, predArea, gtArea };
+};
+
+/** Standard IoU = intersection / union. */
+const calculateIoU = (pred: BoundingBox, gt: BoundingBox): number => {
+  const { intersectionArea, predArea, gtArea } = intersectAndAreas(pred, gt);
+  const unionArea = predArea + gtArea - intersectionArea;
+  if (unionArea <= 0) return 0;
+  return intersectionArea / unionArea;
+};
+
+/**
+ * IoMin = intersection / min(Area(Pred), Area(GT)).
+ * Penalizes misses less when one box is much larger than the other.
+ */
+const calculateIoMin = (pred: BoundingBox, gt: BoundingBox): number => {
+  const { intersectionArea, predArea, gtArea } = intersectAndAreas(pred, gt);
+  const minArea = Math.min(predArea, gtArea);
   if (minArea === 0) return 0;
   return intersectionArea / minArea;
 };
 
+const overlapScore = (metric: MatchOverlapMetric, pred: BoundingBox, gt: BoundingBox): number =>
+  metric === 'iou' ? calculateIoU(pred, gt) : calculateIoMin(pred, gt);
+
 /**
  * Processes GT and Pred boxes for Visualization (Drawing).
  * * Logic for Visualization:
- * - If a Prediction matches *any* GT (IoMin >= Threshold), it is visualized as TP (Green).
+ * - If a Prediction matches *any* GT (overlap >= threshold), it is visualized as TP (Green).
  * (Even if it is a duplicate detection, we visually show it as correct).
  * - If a Prediction matches NO GT, it is FP (Red).
  * - If a GT is matched by at least one Pred, it is TP_GT (Green).
@@ -94,6 +112,7 @@ export const calculateMatches = (
 ): RenderBox[] => {
   const result: RenderBox[] = [];
   const matchedGtIndices = new Set<number>();
+  const { matchOverlapMetric, matchOverlapThreshold } = config;
 
   const validPreds = predBoxes.filter(p => (p.confidence || 1) >= config.confThreshold);
   // Sort preds by confidence (High -> Low)
@@ -106,10 +125,10 @@ export const calculateMatches = (
     gtBoxes.forEach((gt, gtIdx) => {
       if (gt.classId !== pred.classId) return;
 
-      const ioMin = calculateIoMin(pred, gt);
+      const score = overlapScore(matchOverlapMetric, pred, gt);
 
       // Visualization Logic: Any match counts as a "Correct Prediction" visually
-      if (ioMin >= config.ioMinThreshold) {
+      if (score >= matchOverlapThreshold) {
         isTp = true;
         matchedGtIndices.add(gtIdx);
       }
@@ -164,13 +183,15 @@ export interface PRPoint {
   f1: number;
 }
 
+type PROverlapPick = Pick<VisualizationConfig, 'matchOverlapMetric' | 'matchOverlapThreshold'>;
+
 /**
  * Calculates Precision-Recall curve data.
  * * Logic aligned with Python Script:
  * 1. Collect all predictions and GTs.
  * 2. Evaluate at multiple confidence thresholds.
  * 3. Logic:
- * - IoMin Metric: Intersection / min(Area(Pred), Area(GT)).
+ * - Overlap metric: IoU or IoMin (threshold applies to chosen metric).
  * - GT Scanning: A GT counts as 1 TP.
  * - Fragmentation: Multiple preds matching one GT -> 1st is TP, others are IGNORED (Duplicate).
  * - GT Reuse: One pred matching multiple GTs -> Can count as TP for both if they are new.
@@ -178,8 +199,9 @@ export interface PRPoint {
  */
 export const calculatePRStats = async (
   items: ImageItem[],
-  ioMinThreshold: number
+  overlap: PROverlapPick
 ): Promise<PRPoint[]> => {
+  const { matchOverlapMetric, matchOverlapThreshold } = overlap;
   // 1. Gather all GTs and Preds from all items
   const dataset = items.map((item, imgIdx) => {
     const gts = item.gtData || [];
@@ -236,9 +258,9 @@ export const calculatePRStats = async (
       gtsInImage.forEach((gt, gtIdx) => {
         if (gt.classId !== pred.classId) return;
 
-        const ioMin = calculateIoMin(pred, gt);
+        const score = overlapScore(matchOverlapMetric, pred, gt);
 
-        if (ioMin >= ioMinThreshold) {
+        if (score >= matchOverlapThreshold) {
           matchedAnyGt = true;
           // Check if this GT was already found by a higher confidence pred
           if (!detectedSet.has(gtIdx)) {
@@ -275,24 +297,14 @@ export const calculatePRStats = async (
   }
 
   // 3. Monotonic Smoothing (Envelope)
-  // Logic: Precision should not increase as Recall decreases.
-  // We iterate backwards (from Recall=1 to Recall=0) and keep the max precision seen so far.
-
-  // Sort by Recall Descending first (roughly equivalent to Conf ascending)
-  // But strictly, we process the list such that for a given recall R, P is max(P(r)) for all r >= R
-
-  // Sort by Confidence Descending (High Conf -> Low Recall, High Precision)
   rawResults.sort((a, b) => b.confidence - a.confidence);
 
   let maxPrecision = 0;
-  // Iterate backwards (Low Conf/High Recall -> High Conf/Low Recall)
   for (let i = rawResults.length - 1; i >= 0; i--) {
     maxPrecision = Math.max(maxPrecision, rawResults[i].precision);
     rawResults[i].precision = maxPrecision;
   }
 
-  // 4. Add Anchor Points (0,1) and (1,0) for display aesthetics
-  // Insert (Conf=1.0+, P=1, R=0) at start
   if (rawResults[0].recall > 0) {
     rawResults.unshift({
       confidence: 1.1,
@@ -301,9 +313,6 @@ export const calculatePRStats = async (
       f1: 0.0
     });
   }
-
-  // Ensure the last point drops to 0 if needed (optional, depends on preference)
-  // Usually for PR curves we just want the envelope.
 
   return rawResults;
 };

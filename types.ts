@@ -35,6 +35,11 @@ export interface VisualizationConfig {
   matchOverlapMetric: MatchOverlapMetric;
   /** Minimum overlap score vs. a same-class GT to count as a match (IoU or IoMin, depending on metric). */
   matchOverlapThreshold: number;
+  /**
+   * Per-class greedy NMS on predictions: boxes with pairwise IoU above this value are suppressed (lower confidence dropped).
+   * Applied after the confidence threshold; independent of match overlap metric/threshold vs. ground truth.
+   */
+  nmsIouThreshold: number;
   confThreshold: number;
   styles: {
     tpPred: BoxStyle;
@@ -73,6 +78,8 @@ export interface ImageItem {
   name: string;
   file: File | FileSystemFileHandle;
   gtData?: BoundingBox[];
+  /** Optional raw primary preds (legacy / render fallback); grid uses `predictions` from loaded sources. */
+  predData?: BoundingBox[];
   predictions?: { sourceId: string, boxes: BoundingBox[], color: string, visible: boolean }[];
   isModified?: boolean;
   isSaved?: boolean;

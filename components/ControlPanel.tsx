@@ -611,6 +611,41 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
               />
             </div>
+            <div>
+              <div className="flex justify-between items-center gap-2 mb-1">
+                <label className="text-slate-300 text-[10px] shrink-0">NMS IoU threshold</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={Number(config.nmsIouThreshold.toFixed(2))}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    if (Number.isNaN(v)) return;
+                    onConfigChange({
+                      ...config,
+                      nmsIouThreshold: Math.min(1, Math.max(0, Math.round(v * 100) / 100)),
+                    });
+                  }}
+                  className="w-16 shrink-0 py-0.5 px-1 rounded border border-slate-600 bg-slate-700 text-[10px] text-primary text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={Math.min(1, Math.max(0, Math.round(config.nmsIouThreshold / 0.05) * 0.05))}
+                onChange={(e) =>
+                  onConfigChange({ ...config, nmsIouThreshold: parseFloat(e.target.value) })
+                }
+                className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+              <p className="text-[10px] text-slate-500 leading-snug mt-1">
+                Retains the highest-confidence box when multiple predicted boxes overlap more than this threshold. Set to 1 to disable.
+              </p>
+            </div>
           </div>
         </div>
       </div>

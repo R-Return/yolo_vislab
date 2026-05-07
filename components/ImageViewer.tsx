@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { Download, Loader2, Trash2, Check, Copy } from 'lucide-react';
 import { ImageItem, VisualizationConfig, BoxType, RenderBox, HitRegion, BoundingBox } from '../types';
 import { drawVisualization } from '../utils/render';
-import { calculateMatches } from '../utils/yolo';
+import { calculateMatches, applyNmsIou } from '../utils/yolo';
 import { getAudioFilename, extractStartTimeFromFilename } from '../utils/audio';
 
 interface ImageViewerProps {
@@ -167,15 +167,14 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
 
           for (let i = 1; i < visibleSources.length; i++) {
             const src = visibleSources[i];
-            src.boxes.forEach(b => {
-              if ((b.confidence || 1) >= config.confThreshold) {
-                renderBoxes.push({
-                  ...b,
-                  type: BoxType.TP_PRED,
-                  color: src.color,
-                  dashed: false
-                });
-              }
+            const filtered = src.boxes.filter((b) => (b.confidence || 1) >= config.confThreshold);
+            applyNmsIou(filtered, config.nmsIouThreshold).forEach((b) => {
+              renderBoxes.push({
+                ...b,
+                type: BoxType.TP_PRED,
+                color: src.color,
+                dashed: false
+              });
             });
           }
         } else {

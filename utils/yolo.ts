@@ -83,6 +83,37 @@ const calculateIoU = (pred: BoundingBox, gt: BoundingBox): number => {
 };
 
 /**
+ * Greedy per-class NMS: sort by confidence (high first), keep a box unless it has IoU > threshold
+ * with any already-kept box of the same class.
+ */
+export const applyNmsIou = (boxes: BoundingBox[], iouThreshold: number): BoundingBox[] => {
+  if (boxes.length === 0) return [];
+  const byClass = new Map<number, BoundingBox[]>();
+  for (const b of boxes) {
+    const list = byClass.get(b.classId) ?? [];
+    list.push(b);
+    byClass.set(b.classId, list);
+  }
+  const out: BoundingBox[] = [];
+  for (const classBoxes of byClass.values()) {
+    const sorted = [...classBoxes].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    const kept: BoundingBox[] = [];
+    for (const cand of sorted) {
+      let suppress = false;
+      for (const k of kept) {
+        if (calculateIoU(cand, k) > iouThreshold) {
+          suppress = true;
+          break;
+        }
+      }
+      if (!suppress) kept.push(cand);
+    }
+    out.push(...kept);
+  }
+  return out;
+};
+
+/**
  * IoMin = intersection / min(Area(Pred), Area(GT)).
  * Penalizes misses less when one box is much larger than the other.
  */
@@ -99,8 +130,8 @@ const overlapScore = (metric: MatchOverlapMetric, pred: BoundingBox, gt: Boundin
 /**
  * Processes GT and Pred boxes for Visualization (Drawing).
  * * Logic for Visualization:
- * - If a Prediction matches *any* GT (overlap >= threshold), it is visualized as TP (Green).
- * (Even if it is a duplicate detection, we visually show it as correct).
+ * - Predictions above the confidence threshold are deduplicated via per-class greedy NMS (NMS IoU setting).
+ * - If a Prediction matches *any* GT (overlap >= match threshold), it is visualized as TP (Green).
  * - If a Prediction matches NO GT, it is FP (Red).
  * - If a GT is matched by at least one Pred, it is TP_GT (Green).
  * - If a GT is missed, it is FN (Blue/Yellow).
@@ -115,8 +146,8 @@ export const calculateMatches = (
   const { matchOverlapMetric, matchOverlapThreshold } = config;
 
   const validPreds = predBoxes.filter(p => (p.confidence || 1) >= config.confThreshold);
-  // Sort preds by confidence (High -> Low)
-  const sortedPreds = [...validPreds].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  const afterNms = applyNmsIou(validPreds, config.nmsIouThreshold);
+  const sortedPreds = [...afterNms].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
   // 1. Check every prediction against all GTs
   sortedPreds.forEach((pred) => {
@@ -183,7 +214,13 @@ export interface PRPoint {
   f1: number;
 }
 
-type PROverlapPick = Pick<VisualizationConfig, 'matchOverlapMetric' | 'matchOverlapThreshold'>;
+type PRStatsConfigPick = Pick<VisualizationConfig, 'matchOverlapMetric' | 'matchOverlapThreshold' | 'nmsIouThreshold'>;
+
+const primaryPredictionBoxes = (item: ImageItem): BoundingBox[] => {
+  const visible = item.predictions?.filter(p => p.visible) ?? [];
+  if (visible.length > 0) return visible[0].boxes;
+  return item.predData ?? [];
+};
 
 /**
  * Calculates Precision-Recall curve data.
@@ -199,27 +236,22 @@ type PROverlapPick = Pick<VisualizationConfig, 'matchOverlapMetric' | 'matchOver
  */
 export const calculatePRStats = async (
   items: ImageItem[],
-  overlap: PROverlapPick
+  prConfig: PRStatsConfigPick
 ): Promise<PRPoint[]> => {
-  const { matchOverlapMetric, matchOverlapThreshold } = overlap;
-  // 1. Gather all GTs and Preds from all items
+  const { matchOverlapMetric, matchOverlapThreshold, nmsIouThreshold } = prConfig;
+  // 1. Gather all GTs and raw preds per image (primary visible source)
   const dataset = items.map((item, imgIdx) => {
     const gts = item.gtData || [];
-    const preds = item.predData || [];
     return {
       imgIdx,
       gts: gts.map(g => ({ ...g, used: false })),
-      preds: preds.map(p => ({ ...p, imgIdx }))
+      rawPreds: primaryPredictionBoxes(item),
     };
   });
 
-  const allPreds = dataset.flatMap(d => d.preds);
   const totalGtCount = dataset.reduce((acc, d) => acc + d.gts.length, 0);
 
   if (totalGtCount === 0) return [];
-
-  // Sort all predictions globally by confidence (Desc)
-  allPreds.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
   // 2. Generate Thresholds (Sampling)
   // Use 50 steps for smoother curve (similar to Python's dense plot)
@@ -229,9 +261,14 @@ export const calculatePRStats = async (
   for (let i = 0; i <= steps; i++) {
     const confThreshold = i / steps;
 
-    // Filter predictions for this threshold
-    // Note: They remain sorted by confidence
-    const validPreds = allPreds.filter(p => (p.confidence || 0) >= confThreshold);
+    const predsAtStep: (BoundingBox & { imgIdx: number })[] = [];
+    for (const d of dataset) {
+      const passed = d.rawPreds.filter(p => (p.confidence || 0) >= confThreshold);
+      for (const p of applyNmsIou(passed, nmsIouThreshold)) {
+        predsAtStep.push({ ...p, imgIdx: d.imgIdx });
+      }
+    }
+    predsAtStep.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
     // Track detected GTs PER IMAGE for this threshold level
     // Map<ImageIndex, Set<GtIndex>>
@@ -240,7 +277,7 @@ export const calculatePRStats = async (
     let tp = 0;
     let fp = 0;
 
-    for (const pred of validPreds) {
+    for (const pred of predsAtStep) {
       const imgIdx = pred.imgIdx;
       const gtsInImage = dataset[imgIdx].gts;
 

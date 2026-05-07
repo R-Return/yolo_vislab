@@ -100,7 +100,8 @@ const Chart = ({ data, config, type, itemsCount }: { data: PRPoint[], config: Vi
           </div>
           <p className="text-xs text-slate-400">
             <strong>{config.matchOverlapMetric === 'iou' ? 'IoU' : 'IoMin'}:</strong>{' '}
-            {config.matchOverlapThreshold.toFixed(2)} | <strong>Images:</strong> {itemsCount}
+            {config.matchOverlapThreshold.toFixed(2)} | <strong>NMS IoU:</strong>{' '}
+            {config.nmsIouThreshold.toFixed(2)} | <strong>Images:</strong> {itemsCount}
           </p>
           {metricsText && (
             <p className="text-xs font-semibold text-emerald-400 mt-0.5">
@@ -214,11 +215,11 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
 
   // Determine if data is stale by creating a simple hash/string of current items & config
   useEffect(() => {
-    const currentToken = `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}`;
+    const currentToken = `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}_${config.nmsIouThreshold}`;
     if (currentToken !== lastComputationToken && lastComputationToken !== '') {
       setIsStale(true);
     }
-  }, [items, config.matchOverlapMetric, config.matchOverlapThreshold, config.confThreshold, lastComputationToken]);
+  }, [items, config.matchOverlapMetric, config.matchOverlapThreshold, config.confThreshold, config.nmsIouThreshold, lastComputationToken]);
 
   const compute = async () => {
     setLoading(true);
@@ -228,10 +229,11 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
       const points = await calculatePRStats(items, {
         matchOverlapMetric: config.matchOverlapMetric,
         matchOverlapThreshold: config.matchOverlapThreshold,
+        nmsIouThreshold: config.nmsIouThreshold,
       });
       setData(points);
       setLastComputationToken(
-        `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}`
+        `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}_${config.nmsIouThreshold}`
       );
     } catch (e) {
       console.error("Error computing PR stats", e);

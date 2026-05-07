@@ -529,8 +529,34 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         </h2>
         <div className="space-y-3">
           <div>
-            <div className="flex justify-between mb-1"><label className="text-slate-300 text-[10px]">Conf Threshold</label><span className="text-[10px] text-primary">{config.confThreshold.toFixed(2)}</span></div>
-            <input type="range" min="0.0" max="1.0" step="0.05" value={config.confThreshold} onChange={(e) => onConfigChange({ ...config, confThreshold: parseFloat(e.target.value) })} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" />
+            <div className="flex justify-between items-center gap-2 mb-1">
+              <label className="text-slate-300 text-[10px]">Conf Threshold</label>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={Number(config.confThreshold.toFixed(2))}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isNaN(v)) return;
+                  onConfigChange({
+                    ...config,
+                    confThreshold: Math.min(1, Math.max(0, Math.round(v * 100) / 100)),
+                  });
+                }}
+                className="w-16 shrink-0 py-0.5 px-1 rounded border border-slate-600 bg-slate-700 text-[10px] text-primary text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              />
+            </div>
+            <input
+              type="range"
+              min="0.0"
+              max="1.0"
+              step="0.05"
+              value={Math.min(1, Math.max(0, Math.round(config.confThreshold / 0.05) * 0.05))}
+              onChange={(e) => onConfigChange({ ...config, confThreshold: parseFloat(e.target.value) })}
+              className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+            />
           </div>
           <div>
             <div className="flex justify-between mb-1"><label className="text-slate-300 text-[10px]">IoMin Threshold</label><span className="text-[10px] text-primary">{config.ioMinThreshold.toFixed(2)}</span></div>

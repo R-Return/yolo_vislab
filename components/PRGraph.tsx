@@ -99,7 +99,8 @@ const Chart = ({ data, config, type, itemsCount }: { data: PRPoint[], config: Vi
             </h3>
           </div>
           <p className="text-xs text-slate-400">
-            <strong>IoMin:</strong> {config.ioMinThreshold.toFixed(2)} | <strong>Images:</strong> {itemsCount}
+            <strong>{config.matchOverlapMetric === 'iou' ? 'IoU' : 'IoMin'}:</strong>{' '}
+            {config.matchOverlapThreshold.toFixed(2)} | <strong>Images:</strong> {itemsCount}
           </p>
           {metricsText && (
             <p className="text-xs font-semibold text-emerald-400 mt-0.5">
@@ -213,20 +214,25 @@ const PRGraph: React.FC<PRGraphProps> = ({ items, config }) => {
 
   // Determine if data is stale by creating a simple hash/string of current items & config
   useEffect(() => {
-    const currentToken = `${items.length}_${config.ioMinThreshold}_${config.confThreshold}`;
+    const currentToken = `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}`;
     if (currentToken !== lastComputationToken && lastComputationToken !== '') {
       setIsStale(true);
     }
-  }, [items, config.ioMinThreshold, config.confThreshold, lastComputationToken]);
+  }, [items, config.matchOverlapMetric, config.matchOverlapThreshold, config.confThreshold, lastComputationToken]);
 
   const compute = async () => {
     setLoading(true);
     setIsStale(false);
     try {
       await new Promise(r => setTimeout(r, 10)); // UI thread breathing room
-      const points = await calculatePRStats(items, config.ioMinThreshold);
+      const points = await calculatePRStats(items, {
+        matchOverlapMetric: config.matchOverlapMetric,
+        matchOverlapThreshold: config.matchOverlapThreshold,
+      });
       setData(points);
-      setLastComputationToken(`${items.length}_${config.ioMinThreshold}_${config.confThreshold}`);
+      setLastComputationToken(
+        `${items.length}_${config.matchOverlapMetric}_${config.matchOverlapThreshold}_${config.confThreshold}`
+      );
     } catch (e) {
       console.error("Error computing PR stats", e);
     } finally {

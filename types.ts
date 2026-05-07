@@ -28,8 +28,13 @@ export interface BoxStyle {
 export type ViewMode = 'grid' | 'pr-curve';
 export type AspectRatio = '16:9' | '4:3' | '1:1' | 'auto';
 
+/** How prediction–GT box overlap is scored for matching (TP/FP and PR curves). */
+export type MatchOverlapMetric = 'iou' | 'iomin';
+
 export interface VisualizationConfig {
-  ioMinThreshold: number; // Changed from iopThreshold
+  matchOverlapMetric: MatchOverlapMetric;
+  /** Minimum overlap score vs. a same-class GT to count as a match (IoU or IoMin, depending on metric). */
+  matchOverlapThreshold: number;
   confThreshold: number;
   styles: {
     tpPred: BoxStyle;

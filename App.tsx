@@ -19,10 +19,10 @@ const DEFAULT_CONFIG: VisualizationConfig = {
   nmsIouThreshold: 0.7,
   confThreshold: 0.25,
   styles: {
-    tpPred: { color: '#00FFFF', dashed: false }, // Cyan, Solid
+    tpPred: { color: '#000000', dashed: false }, // Black, Solid
     tpGt: { color: '#FFFFFF', dashed: true },  // White, Dashed
-    fn: { color: '#00FF00', dashed: true },  // Lime, Dashed
-    fp: { color: '#FFFF00', dashed: false }, // Yellow, Solid
+    fn: { color: '#FFFF00', dashed: true },  // Yellow, Dashed
+    fp: { color: '#000000', dashed: false }, // Black, Solid
   },
   lineWidth: 4,
   labelFontSize: 23,
@@ -215,9 +215,7 @@ const App: React.FC = () => {
       }
       const labelMap = await preloadLabels(fileMap);
 
-      const colors = ['#f43f5e', '#ec4899', '#d946ef', '#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9'];
-      const currentCount = activeProject.predictionSources?.length || 0;
-      const color = colors[currentCount % colors.length];
+      const color = '#000000';
 
       const newSource: PredictionSource = {
         id: generateId(),
@@ -502,7 +500,7 @@ const App: React.FC = () => {
 
       if (hasPred) {
         // High Contrast Palette
-        const baseColors = ['#00FFFF', '#00FF00', '#FFFF00', '#FF00FF', '#FFFFFF', '#FF8C00', '#00BFFF', '#39FF14'];
+        const baseColors = ['#000000'];
         let colorIdx = activeProject.predictionSources?.length || 0;
         let newSources: PredictionSource[] = [];
 
@@ -1051,7 +1049,7 @@ const App: React.FC = () => {
                       }
                     }}
                     className={`cursor-pointer px-3 py-0.5 rounded transition-all select-none ${lockedHighlight === BoxType.TP_PRED ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
-                    style={{ color: config.styles.tpPred.color }}
+                    style={{ color: config.styles.tpGt.color }}
                   >
                     <span className="font-bold mr-1">TP:</span>{pageStats.tp}
                   </div>

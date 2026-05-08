@@ -1195,7 +1195,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, config, externalHighlig
               }
             }}
             className={`cursor-pointer px-1.5 py-0.5 rounded transition-all select-none ${lockedStat === BoxType.TP_PRED ? 'bg-white/20 ring-1 ring-white/50' : 'hover:bg-white/10'}`}
-            style={{ color: config.styles.tpPred.color }}
+            style={{ color: config.styles.tpGt.color }}
           >
             TP:{computedStats.tp}
           </span>

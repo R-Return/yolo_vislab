@@ -5,7 +5,7 @@ import PRGraph from './components/PRGraph';
 import { VisualizationConfig, ImageItem, FileMap, Project, FileCollection, BoxType, LabelMap, BoundingBox, PredictionSource } from './types';
 import { ChevronLeft, ChevronRight, Inbox, Download, Loader2, ZoomIn, ZoomOut, Shuffle, PanelRight } from 'lucide-react';
 import { drawVisualization } from './utils/render';
-import { parseYoloFile, calculateMatches, preloadLabels } from './utils/yolo';
+import { parseYoloFile, calculateMatches, applyNmsIou, preloadLabels } from './utils/yolo';
 import { exportLabels, exportLabelsAsZip } from './utils/export';
 import { AudioPlayer, getAudioFilename, extractStartTimeFromFilename } from './utils/audio';
 import { saveLabelToDB, getAllSavedLabels, deleteLabelFromDB, clearAllLabelsFromDB } from './utils/db';
@@ -814,9 +814,10 @@ const App: React.FC = () => {
       }));
 
       // 2. Configure Layout (Stitched High-Res)
-      const cols = config.gridSize === 9 ? 3 : 4;
-      const targetCellWidth = 1600; // High resolution standard width
-      const gap = 80; // Large gap for separation
+      const cols = config.gridSize === 9 ? 3 : config.gridSize === 16 ? 4 : 1;
+      const isSingleImageMode = config.gridSize === 1;
+      const targetCellWidth = 1600; // High resolution standard width for multi-image export
+      const gap = isSingleImageMode ? 0 : 80;
 
       // 3. Organize Grid Rows
       const rows: typeof loadedData[] = [];
@@ -836,6 +837,12 @@ const App: React.FC = () => {
       const rowConfigs = rows.map(row => {
         // Calculate height for each item based on target width to maintain aspect ratio
         const processedItems = row.map(data => {
+          if (isSingleImageMode) {
+            const width = data.img.naturalWidth || targetCellWidth;
+            const height = data.img.naturalHeight || Math.round(width / 1.77);
+            return { ...data, width, height };
+          }
+
           const aspect = data.img.naturalWidth ? (data.img.naturalWidth / data.img.naturalHeight) : 1.77;
           const height = Math.round(targetCellWidth / aspect);
           return { ...data, width: targetCellWidth, height };
@@ -849,7 +856,11 @@ const App: React.FC = () => {
       // Remove last gap
       if (rowConfigs.length > 0) totalHeight -= gap;
 
-      const totalWidth = (cols * targetCellWidth) + ((cols - 1) * gap);
+      const totalWidth = rowConfigs.length > 0
+        ? Math.max(...rowConfigs.map(row =>
+          row.items.reduce((acc, item, idx) => acc + item.width + (idx > 0 ? gap : 0), 0)
+        ))
+        : 0;
 
       // 5. Create Canvas
       const canvas = document.createElement('canvas');
@@ -877,10 +888,40 @@ const App: React.FC = () => {
           ctx.clip(); // Clip to exact image area
 
           const scaleFactor = width / (img.naturalWidth || width);
+          const currentGt = item.gtData || [];
+          const visibleSources = item.predictions?.filter(p => p.visible) || [];
+          const shouldShowPreds = config.showPredictions !== false;
+          let renderBoxes = [];
+
+          if (shouldShowPreds && visibleSources.length > 0) {
+            const primaryMatches = calculateMatches(currentGt, visibleSources[0].boxes, config);
+            primaryMatches.forEach(m => {
+              if (m.type === BoxType.TP_PRED || m.type === BoxType.FP) {
+                m.color = visibleSources[0].color;
+              }
+            });
+            renderBoxes.push(...primaryMatches);
+
+            for (let srcIdx = 1; srcIdx < visibleSources.length; srcIdx++) {
+              const src = visibleSources[srcIdx];
+              const filtered = src.boxes.filter((b) => (b.confidence || 1) >= config.confThreshold);
+              applyNmsIou(filtered, config.nmsIouThreshold).forEach((b) => {
+                renderBoxes.push({
+                  ...b,
+                  type: BoxType.TP_PRED,
+                  color: src.color,
+                  dashed: false
+                });
+              });
+            }
+          } else {
+            renderBoxes = calculateMatches(currentGt, [], config);
+          }
 
           await drawVisualization(ctx, item, config, width, height, img, {
             fontSize: Math.round(config.labelFontSize * scaleFactor),
-            forceLineWidth: Math.max(1, Math.round(config.lineWidth * scaleFactor))
+            forceLineWidth: Math.max(1, Math.round(config.lineWidth * scaleFactor)),
+            preCalculatedBoxes: renderBoxes
           });
 
           ctx.restore();
@@ -1093,7 +1134,7 @@ const App: React.FC = () => {
                     onClick={handleDownloadPage}
                     disabled={isDownloading}
                     className="bg-primary hover:bg-blue-600 text-white p-2 rounded flex items-center justify-center disabled:opacity-50 transition-colors shadow-lg shadow-blue-900/20"
-                    title="Download Page"
+                    title="Download View"
                   >
                     {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
                   </button>
